@@ -1,0 +1,46 @@
+[project]
+name = "paper-plane-x-backend"
+version = "0.1.0"
+description = "AI Agent-powered research survey workflow system"
+readme = "README.md"
+authors = [{ name = "windlx", email = "1418043337@qq.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.12.5",
+    "uvicorn>=0.44.0",
+    "fastapi[standard]>=0.135.3",
+    "chromadb>=1.5.7",
+    "litellm>=1.83.4",
+    "pydantic-settings>=2.13.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pyright>=1.1.408",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src"]
+strict = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paper_plane_x_backend"]

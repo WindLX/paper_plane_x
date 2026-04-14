@@ -1,0 +1,38 @@
+# Paper Plane X backend default configuration
+# You can override this file path via env var: PPX_CONFIG_FILE=/abs/path/to/your.toml
+APP_NAME = "Paper Plane X"
+DEBUG = false
+LOG_LEVEL = "DEBUG"
+LOG_APP_ONLY = true
+LOG_TO_FILE = true
+LOG_FILE_PATH = "./data/logs/backend.log"
+LOG_FILE_MAX_BYTES = 10485760
+LOG_FILE_BACKUP_COUNT = 5
+HOST = "127.0.0.1"
+PORT = 8000
+DATA_DIR = "./data"
+PROMPTS_DIR = "./prompts"
+DATABASE_URL = "sqlite:///./data/app.db"
+MINERU_BASE_URL = "http://localhost:7860"
+MINERU_OUTPUT_DIR = "./data/papers"
+DATA_PROCESS_MAX_RETRIES = 3
+DATA_PROCESS_WORKER_COUNT = 2
+
+[LLM]
+# DeepSeek recommended default model for text generation
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+# Leave empty here and pass api_key via env: LLM__API_KEY=sk-...
+api_key = ""
+temperature = 0.7
+max_tokens = 4096
+timeout = 60.0
+is_vlm = false
+
+[AGENT_LLM.extraction]
+model = "deepseek-chat"
+temperature = 0.3
+
+[AGENT_LLM.fact_check]
+model = "deepseek-chat"
+temperature = 0.1

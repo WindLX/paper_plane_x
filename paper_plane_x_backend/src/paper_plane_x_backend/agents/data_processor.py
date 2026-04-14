@@ -1,0 +1,240 @@
+"""数据处理器 Agent 实现.
+
+实现论文数据提取和事实核查的 Agent 组：
+- 继承式 Agent：ExtractionAgent / FactCheckAgent
+- 编排器：DataProcessorAgentGroup（提取-核查闭环）
+"""
+
+import json
+import logging
+from typing import Any, Generic, TypeVar
+
+from pydantic import BaseModel
+
+from paper_plane_x_backend.config import LLMConfig, settings
+from paper_plane_x_backend.core.agent_runtime import BaseAgent
+from paper_plane_x_backend.schemas.agent_io.data_processor import (
+    ExtractionAgentOutput,
+    ExtractionAgentUserInput,
+    FactCheckAgentOutput,
+    FactCheckAgentUserInput,
+)
+
+logger = logging.getLogger(__name__)
+
+TOutput = TypeVar("TOutput", bound=BaseModel)
+
+
+class StructuredDataProcessorAgent(Generic[TOutput]):
+    """DataProcessor 子域的结构化 Agent 抽象基类。"""
+
+    output_schema: type[TOutput]
+    agent_name: str
+    llm_config_name: str
+    prompt_filename: str
+
+    def __init__(self, llm_config: LLMConfig | None = None) -> None:
+        self.llm_config = llm_config or settings.get_agent_llm_config(
+            self.llm_config_name
+        )
+
+        self._agent = BaseAgent(
+            output_schema=self.output_schema,
+            mode="api",
+            system_prompt=self._build_system_prompt(),
+            max_steps=3,
+            save_trace=True,
+            llm_config=self.llm_config,
+            agent_name=self.agent_name,
+        )
+
+    def _build_system_prompt(self) -> str:
+        system_md = settings.load_prompt("data_processor", "System.md")
+        task_md = settings.load_prompt("data_processor", self.prompt_filename)
+        task_md = self._inject_schema_template(
+            prompt_template=task_md,
+            schema_model=self.output_schema,
+        )
+        return f"{system_md}\n\n{task_md}"
+
+    @staticmethod
+    def _inject_schema_template(
+        prompt_template: str,
+        schema_model: type[BaseModel],
+    ) -> str:
+        """将 Pydantic 导出的完整 JSON Schema 注入提示词模板。"""
+        schema_json = json.dumps(
+            schema_model.model_json_schema(),
+            ensure_ascii=False,
+            indent=2,
+        )
+        return prompt_template.replace("{{OUTPUT_SCHEMA_JSON}}", schema_json)
+
+    @property
+    def runtime_name(self) -> str:
+        return self._agent.agent_name
+
+    @property
+    def last_trace_id(self) -> str | None:
+        return self._agent.last_trace_id
+
+    def reset_memory(self) -> None:
+        self._agent.memory.reset_memory()
+
+    def append_user_message(self, payload: dict[str, Any]) -> None:
+        self._agent.memory.append_user_message(payload)
+
+    def append_assistant_message(self, payload: dict[str, Any], *, name: str) -> None:
+        self._agent.memory.append_assistant_message(
+            content=json.dumps(payload, ensure_ascii=False),
+            name=name,
+        )
+
+    async def run(self, project_id: str) -> TOutput:
+        result = await self._agent.run(project_id=project_id)
+        assert isinstance(result, self.output_schema), (
+            f"Expected output of type {self.output_schema.__name__}, "
+            f"but got {type(result).__name__}"
+        )
+        return result
+
+
+class ExtractionAgent(StructuredDataProcessorAgent[ExtractionAgentOutput]):
+    """数据提取 Agent。"""
+
+    output_schema = ExtractionAgentOutput
+    agent_name = "ExtractionAgent"
+    llm_config_name = "extraction"
+    prompt_filename = "Extraction.md"
+
+    @staticmethod
+    def build_user_message(md_content: str, images: list[str]) -> dict[str, Any]:
+        return ExtractionAgentUserInput(
+            md_content=md_content,
+            images=images,
+        ).model_dump()
+
+
+class FactCheckAgent(StructuredDataProcessorAgent[FactCheckAgentOutput]):
+    """事实核查 Agent。"""
+
+    output_schema = FactCheckAgentOutput
+    agent_name = "FactCheckAgent"
+    llm_config_name = "fact_check"
+    prompt_filename = "Fact_Check.md"
+
+    @staticmethod
+    def build_user_message(md_content: str, images: list[str]) -> dict[str, Any]:
+        return FactCheckAgentUserInput(
+            md_content=md_content,
+            images=images,
+        ).model_dump()
+
+
+class DataProcessorAgentGroup:
+    """提取-核查闭环编排器。"""
+
+    def __init__(
+        self,
+        extraction_agent: ExtractionAgent | None = None,
+        fact_check_agent: FactCheckAgent | None = None,
+    ) -> None:
+        self.extraction_agent = extraction_agent or ExtractionAgent()
+        self.fact_check_agent = fact_check_agent or FactCheckAgent()
+        self.last_fact_check_trace_id: str | None = None
+
+    async def run_extraction_fact_check_loop(
+        self,
+        *,
+        project_id: str,
+        md_content: str,
+        images: list[str],
+        max_retries: int,
+    ) -> tuple[ExtractionAgentOutput, FactCheckAgentOutput, int]:
+        extraction_result: ExtractionAgentOutput | None = None
+        fact_check_result: FactCheckAgentOutput | None = None
+        retry_count = 0
+        self.last_fact_check_trace_id = None
+
+        self.extraction_agent.reset_memory()
+        self.fact_check_agent.reset_memory()
+
+        self.extraction_agent.append_user_message(
+            self.extraction_agent.build_user_message(
+                md_content=md_content, images=images
+            )
+        )
+        self.fact_check_agent.append_user_message(
+            self.fact_check_agent.build_user_message(
+                md_content=md_content, images=images
+            )
+        )
+
+        while retry_count < max_retries:
+            extraction_result = await self.extraction_agent.run(project_id=project_id)
+
+            extraction_message = {"extraction_result": extraction_result.model_dump()}
+            self.extraction_agent.append_assistant_message(
+                extraction_message,
+                name=self.extraction_agent.runtime_name,
+            )
+            self.fact_check_agent.append_assistant_message(
+                extraction_message,
+                name=self.extraction_agent.runtime_name,
+            )
+
+            fact_check_result = await self.fact_check_agent.run(project_id=project_id)
+            if fact_check_result is None:
+                raise RuntimeError("Fact check result is empty after extraction loop")
+
+            self.last_fact_check_trace_id = self.fact_check_agent.last_trace_id
+            fact_check_message = {"fact_check_result": fact_check_result.model_dump()}
+
+            self.extraction_agent.append_assistant_message(
+                fact_check_message,
+                name=self.fact_check_agent.runtime_name,
+            )
+            self.fact_check_agent.append_assistant_message(
+                fact_check_message,
+                name=self.fact_check_agent.runtime_name,
+            )
+
+            if fact_check_result.is_passed:
+                logger.info(
+                    "event=data_processor.fact_check_passed project_id=%s attempts=%s",
+                    project_id,
+                    retry_count + 1,
+                )
+                break
+
+            logger.warning(
+                "event=data_processor.fact_check_failed project_id=%s attempt=%s max_retries=%s error_count=%s",
+                project_id,
+                retry_count + 1,
+                max_retries,
+                len(fact_check_result.errors),
+            )
+            for error in fact_check_result.errors:
+                logger.warning(
+                    "event=data_processor.fact_check_error_detail project_id=%s field=%s suggestion=%s",
+                    project_id,
+                    error.field_path,
+                    error.suggestion,
+                )
+
+            retry_count += 1
+
+        if fact_check_result is None:
+            raise RuntimeError("Fact check result is empty after fact check loop")
+
+        if not fact_check_result.is_passed:
+            logger.warning(
+                "event=data_processor.fact_check_waiting_human_review project_id=%s retries=%s",
+                project_id,
+                retry_count,
+            )
+
+        if extraction_result is None:
+            raise RuntimeError("Extraction result is empty after fact check passed")
+
+        return extraction_result, fact_check_result, retry_count
