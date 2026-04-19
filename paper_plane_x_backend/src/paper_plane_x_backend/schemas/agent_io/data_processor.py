@@ -21,7 +21,7 @@ class QuickScan(BaseModel):
     )
 
 
-# --- Synthesis Data 模块定义 ---
+# --- Synthesis Data ---
 
 
 class ResearchGap(BaseModel):
@@ -65,6 +65,63 @@ class SynthesisData(BaseModel):
     )
 
 
+# --- Analysis Report ---
+
+
+class PrerequisiteConcept(BaseModel):
+    """先修知识体系"""
+
+    concept_name: str = Field(
+        ..., description="学科概念/理论名称（如：李雅普诺夫稳定性，马尔可夫决策过程）"
+    )
+    brief_explanation: str = Field(..., description="该概念的通俗解释（1-2句话）")
+    relevance_to_paper: CitedText = Field(
+        ..., description="这篇论文为什么要用到这个理论？在文中的具体作用是什么？"
+    )
+
+
+class CoreFormulation(BaseModel):
+    """核心数学/理论建模"""
+
+    problem_definition: CitedText = Field(
+        ...,
+        description="物理问题/工程问题是如何被转化为数学模型的？（核心假设、状态空间、动作空间定义等）",
+    )
+    objective_function: CitedText = Field(
+        ...,
+        description="优化的目标函数（Loss Function, Reward Function 等核心方程及其解释）",
+    )
+    algorithm_flow: CitedText = Field(
+        ..., description="伪代码逻辑、算法流程图的文本描述，或网络架构的具体连接方式。"
+    )
+
+
+class DerivationStep(BaseModel):
+    """逻辑推导步骤（列表形式，展示 Step-by-Step）"""
+
+    step_order: int = Field(..., description="步骤序号")
+    step_name: str = Field(
+        ..., description="该步骤的简短名称（如：定义状态变量、构造能量函数、求解偏导）"
+    )
+    detail_explanation: CitedText = Field(
+        ...,
+        description="该步骤的具体推导逻辑、关键公式的物理含义，以及上下文转移逻辑。",
+    )
+
+
+class AnalysisReport(BaseModel):
+    """理论解析智能体最终输出 Schema"""
+
+    prerequisites: list[PrerequisiteConcept] = Field(
+        ..., description="理解本文需要具备的 3-5 个核心先修知识"
+    )
+    core_formulation: CoreFormulation = Field(..., description="理论建模基础")
+    derivation_steps: list[DerivationStep] = Field(
+        ...,
+        description="核心方法的 Step-by-Step 逻辑推导（剥离次要证明，保留主干逻辑）",
+    )
+
+
 # --- FactCheck Error 定义 ---
 
 
@@ -92,6 +149,18 @@ class ExtractionAgentUserInput(BaseModel):
 class ExtractionAgentOutput(BaseModel):
     quick_scan: QuickScan
     synthesis_data: SynthesisData
+
+
+class AnalysisAgentUserInput(BaseModel):
+    md_content: str
+    images: list[str] = Field(
+        default_factory=list,
+        description="原始 Markdown 中提取的图片数据列表，元素是 base64 编码的图片数据",
+    )
+
+
+class AnalysisAgentOutput(BaseModel):
+    analysis_report: AnalysisReport
 
 
 class FactCheckAgentUserInput(BaseModel):

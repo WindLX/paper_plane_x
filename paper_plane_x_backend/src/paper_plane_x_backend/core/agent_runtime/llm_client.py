@@ -4,7 +4,7 @@
 """
 
 import logging
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 
 from litellm import acompletion  # pyright: ignore[reportUnknownVariableType]
 from pydantic import BaseModel, Field
@@ -24,7 +24,9 @@ class LLMResponse(BaseModel):
     """LLM 响应包装类."""
 
     content: str | None = None
-    tool_calls: list[ToolCallMessage] = Field(default_factory=list)
+    tool_calls: list[ToolCallMessage] = Field(
+        default_factory=lambda: cast(list[ToolCallMessage], [])
+    )
     model: str | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
 
@@ -46,9 +48,9 @@ class LLMClient:
         custom_headers: dict[str, str] | None = None,
         is_vlm: bool = False,
     ):
-        self.model = model or settings.LLM.model
-        self.api_key = api_key or settings.LLM.api_key
-        self.base_url = base_url or settings.LLM.base_url
+        self.model = model or settings.llm.model
+        self.api_key = api_key or settings.llm.api_key
+        self.base_url = base_url or settings.llm.base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -70,21 +72,43 @@ class LLMClient:
 
     def _parse_response(self, response: Any) -> LLMResponse:
         message = response.choices[0].message
-        raw_tool_calls = getattr(message, "tool_calls", None)
+        raw_tool_calls: Any = getattr(message, "tool_calls", None)
 
         tool_calls: list[ToolCallMessage] = []
-        if raw_tool_calls:
-            tool_calls = [
-                ToolCallMessage(
-                    id=tc.id,
-                    type=tc.type,
-                    function=ToolCallFunction(
-                        name=tc.function.name,
-                        arguments=tc.function.arguments,
-                    ),
+        if isinstance(raw_tool_calls, list):
+            for tc in cast(list[Any], raw_tool_calls):
+                tc_id = getattr(tc, "id", None)
+                function = getattr(tc, "function", None)
+                fn_name = getattr(function, "name", None)
+                fn_arguments = getattr(function, "arguments", None)
+
+                if not isinstance(tc_id, str):
+                    continue
+                if not isinstance(fn_name, str):
+                    continue
+
+                normalized_arguments: str | dict[str, Any]
+                if isinstance(fn_arguments, str):
+                    normalized_arguments = fn_arguments
+                elif isinstance(fn_arguments, dict):
+                    normalized_arguments = {
+                        key: value
+                        for key, value in cast(dict[Any, Any], fn_arguments).items()
+                        if isinstance(key, str)
+                    }
+                else:
+                    continue
+
+                tool_calls.append(
+                    ToolCallMessage(
+                        id=tc_id,
+                        type="function",
+                        function=ToolCallFunction(
+                            name=fn_name,
+                            arguments=normalized_arguments,
+                        ),
+                    )
                 )
-                for tc in raw_tool_calls
-            ]
 
         usage = dict(response.usage) if getattr(response, "usage", None) else {}
         return LLMResponse(
@@ -93,6 +117,21 @@ class LLMClient:
             model=getattr(response, "model", None),
             usage=usage,
         )
+
+    def _resolve_model_provider(self) -> tuple[str, str | None]:
+        """推断 LiteLLM provider.
+
+        LiteLLM 需要可识别的 provider。对于自建/代理的 OpenAI 兼容网关，
+        常见配置是裸模型名（如 deepseek-chat）+ base_url，此时需要显式指定
+        custom_llm_provider=openai。
+        """
+        if "/" in self.model:
+            return self.model, None
+
+        if self.base_url:
+            return self.model, "openai"
+
+        return self.model, None
 
     async def chat(
         self,
@@ -103,15 +142,17 @@ class LLMClient:
         tool_choice: Literal["auto"] = "auto",
         **kwargs: Any,
     ) -> LLMResponse:
+        resolved_model, custom_provider = self._resolve_model_provider()
         logger.debug(
-            "event=llm.request model=%s message_count=%s tool_count=%s structured=%s",
-            self.model,
+            "event=llm.request model=%s provider=%s message_count=%s tool_count=%s structured=%s",
+            resolved_model,
+            custom_provider,
             len(messages),
             0 if tools is None else len(tools),
             output_schema is not None,
         )
         request: dict[str, Any] = {
-            "model": self.model,
+            "model": resolved_model,
             "messages": messages,
             "api_key": self.api_key,
             "base_url": self.base_url,
@@ -120,6 +161,9 @@ class LLMClient:
             "timeout": kwargs.pop("timeout", self.timeout),
             "headers": self.custom_headers or None,
         }
+
+        if custom_provider is not None:
+            request["custom_llm_provider"] = custom_provider
 
         if tools is not None:
             request["tools"] = tools

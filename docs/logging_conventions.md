@@ -7,7 +7,7 @@
 ## 1. 目标
 
 - 日志可检索：统一使用 `event=` 事件名。
-- 日志可关联：关键上下文字段固定命名（如 `project_id`、`paper_id`、`task_id`）。
+- 日志可关联：关键上下文字段固定命名（如 `paper_id`、`task_id`、`trace_id`）。
 - 日志可分级：同类问题在固定级别输出。
 - 日志可演进：新增模块遵循同一命名规范。
 
@@ -74,24 +74,22 @@
   - `task_manager.task_failed`
   - `task_manager.tasks_recovered`
   - `data_process.retry_upload_queued`
-  - `data_process.manual_update_request_received`
+  - `paper.manual_update_request_received`
   - `mineru.parse_http_error`
 
 ## 5. 推荐写法
 
 ```python
 logger.info(
-    "event=task_manager.task_submitted task_id=%s project_id=%s paper_id=%s",
+  "event=task_manager.task_submitted task_id=%s paper_id=%s",
     task_id,
-    project_id,
     paper_id,
 )
 
 logger.exception(
-    "event=agent.run_failed agent=%s mode=%s project_id=%s step=%s max_steps=%s",
+  "event=agent.run_failed agent=%s mode=%s step=%s max_steps=%s",
     agent_name,
     mode,
-    project_id,
     step,
     max_steps,
 )
@@ -108,10 +106,12 @@ logger.exception(
 本轮已对齐以下后端模块日志：
 
 - `core/agent_runtime/*`
-- `services/data_process_*`
-- `services/paper_service.py`
+- `services/data_process_tasks/*`
+- `services/orchestrators/*`
+- `services/paper/*`
 - `services/mineru.py`
 - `api/routers/project.py`
+- `api/routers/paper.py`
 - `api/routers/data_process.py`
 - `api/dependencies.py`
 - `agents/data_processor.py`

@@ -15,12 +15,12 @@ def test_paper_from_db_row_parses_enums_and_json_fields() -> None:
     now = datetime.now()
     row = {
         "paper_id": "p1",
-        "project_id": "proj1",
         "title": "t",
         "authors": json.dumps(["A", "B"], ensure_ascii=False),
         "year": 2024,
-        "venue": "v",
+        "publication": "v",
         "doi": "d",
+        "custom_meta": '{"source":"manual"}',
         "md_content": "md",
         "raw_pdf_path": "/tmp/a.pdf",
         "raw_pdf_sha256": "hash-1",
@@ -39,13 +39,14 @@ def test_paper_from_db_row_parses_enums_and_json_fields() -> None:
     paper = Paper.from_db_row(row)
 
     assert paper.extraction_status == ExtractionStatus.COMPLETED
-    assert paper.fact_check_status == FactCheckStatus.PASSED
+    assert paper.extraction_fact_check_status == FactCheckStatus.PASSED
     assert paper.authors == ["A", "B"]
     assert paper.images_paths == ["/tmp/i.png"]
     assert paper.quick_scan == {"k": 1}
     assert paper.synthesis_data == {"s": 2}
-    assert paper.fact_check_result == {"ok": True}
-    assert paper.final_fact_check_trace_id == "trace-1"
+    assert paper.extraction_fact_check_result == {"ok": True}
+    assert paper.extraction_final_fact_check_trace_id == "trace-1"
+    assert paper.analysis_fact_check_status == FactCheckStatus.PENDING
     assert paper.raw_pdf_sha256 == "hash-1"
 
 
@@ -53,12 +54,12 @@ def test_paper_from_db_row_fills_empty_list_defaults() -> None:
     now = datetime.now()
     row = {
         "paper_id": "p2",
-        "project_id": "proj1",
         "title": None,
         "authors": None,
         "year": None,
-        "venue": None,
+        "publication": None,
         "doi": None,
+        "custom_meta": None,
         "md_content": None,
         "raw_pdf_path": None,
         "raw_pdf_sha256": None,
@@ -83,7 +84,6 @@ def test_paper_from_db_row_fills_empty_list_defaults() -> None:
 def test_agent_trace_to_db_dict_serializes_json_fields() -> None:
     trace = AgentTrace(
         trace_id="t1",
-        project_id="p1",
         agent_name="A",
         latest_input_message={"role": "user", "content": "x"},
         output_message="ok",

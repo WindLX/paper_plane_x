@@ -49,6 +49,7 @@ class AgentLLMConfigs(BaseModel):
     extraction: LLMConfig | None = Field(
         default=None, description="ExtractionAgent 配置"
     )
+    analysis: LLMConfig | None = Field(default=None, description="AnalysisAgent 配置")
     fact_check: LLMConfig | None = Field(
         default=None, description="FactCheckAgent 配置"
     )
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_prefix="PPX_",
         env_nested_delimiter="__",
         extra="ignore",
     )
@@ -104,64 +106,68 @@ class Settings(BaseSettings):
         )
 
     # 应用配置
-    APP_NAME: str = "Paper Plane X"
-    DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
-    LOG_APP_ONLY: bool = True
-    LOG_TO_FILE: bool = True
-    LOG_FILE_PATH: Path = Path("./data/logs/backend.log")
-    LOG_FILE_MAX_BYTES: int = 10 * 1024 * 1024
-    LOG_FILE_BACKUP_COUNT: int = 5
+    app_name: str = "Paper Plane X"
+    debug: bool = False
+    log_level: str = "INFO"
+    log_app_only: bool = True
+    log_to_file: bool = True
+    log_file_path: Path = Path("./data/logs/backend.log")
+    log_file_max_bytes: int = 10 * 1024 * 1024
+    log_file_backup_count: int = 5
 
     # 服务器配置
-    HOST: str = "127.0.0.1"
-    PORT: int = 8000
+    host: str = "127.0.0.1"
+    port: int = 8000
 
     # 数据目录
-    DATA_DIR: Path = Path("./data")
+    data_dir: Path = Path("./data")
 
     # Prompt 目录
-    PROMPTS_DIR: Path = Path("./prompts")
+    prompts_dir: Path = Path("./prompts")
 
     # 数据库配置
-    DATABASE_URL: str = "sqlite:///./data/app.db"
+    database_url: str = "sqlite:///./data/app.db"
 
     # LLM 全局默认配置
-    LLM: LLMConfig = Field(default_factory=LLMConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
 
     # 各 Agent 独立 LLM 配置
-    AGENT_LLM: AgentLLMConfigs = Field(default_factory=AgentLLMConfigs)
+    agent_llm: AgentLLMConfigs = Field(default_factory=AgentLLMConfigs)
 
     # MinerU 配置
-    MINERU_BASE_URL: str = Field(
+    mineru_base_url: str = Field(
         default="http://localhost:7860", description="MinerU API 地址"
     )
-    MINERU_OUTPUT_DIR: Path = Field(
+    mineru_output_dir: Path = Field(
         default=Path("./data/papers"), description="MinerU 服务端输出目录参数"
     )
 
     # Data Process 配置
-    DATA_PROCESS_MAX_RETRIES: int = Field(
+    data_process_max_retries: int = Field(
         default=3, description="事实核查失败最大重试次数"
     )
-    DATA_PROCESS_WORKER_COUNT: int = Field(
+    data_process_worker_count: int = Field(
         default=2, description="后台数据处理 worker 数量"
     )
-    DATA_PROCESS_SHUTDOWN_TIMEOUT: float = Field(
+    data_process_shutdown_timeout: float = Field(
         default=5.0,
         description="后台数据处理 worker 池关闭超时时间（秒）",
+    )
+    data_process_task_max_seconds: float = Field(
+        default=600.0,
+        description="单个 data-process 任务最大执行时长（秒）",
     )
 
     @property
     def database_path(self) -> Path:
         """获取数据库文件路径."""
-        return self.DATA_DIR / "app.db"
+        return self.data_dir / "app.db"
 
     def ensure_directories(self) -> None:
         """确保必要的目录存在."""
-        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        self.MINERU_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        self.LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.mineru_output_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     def get_prompt_path(self, group: str, filename: str) -> Path:
         """获取 prompt 文件路径.
@@ -173,7 +179,7 @@ class Settings(BaseSettings):
         Returns:
             Path: prompt 文件绝对路径
         """
-        return self.PROMPTS_DIR / group / filename
+        return self.prompts_dir / group / filename
 
     def load_prompt(self, group: str, filename: str) -> str:
         """加载 prompt 文件内容.
@@ -205,23 +211,24 @@ class Settings(BaseSettings):
             LLMConfig: LLM 配置
         """
         agent_configs = {
-            "extraction": self.AGENT_LLM.extraction,
-            "fact_check": self.AGENT_LLM.fact_check,
-            "planner": self.AGENT_LLM.planner,
-            "writer": self.AGENT_LLM.writer,
-            "reviewer": self.AGENT_LLM.reviewer,
+            "extraction": self.agent_llm.extraction,
+            "analysis": self.agent_llm.analysis,
+            "fact_check": self.agent_llm.fact_check,
+            "planner": self.agent_llm.planner,
+            "writer": self.agent_llm.writer,
+            "reviewer": self.agent_llm.reviewer,
         }
 
         agent_config = agent_configs.get(agent_name)
         if agent_config is not None:
             # 合并配置：Agent 特定值覆盖全局默认值
-            global_config = self.LLM.model_dump()
+            global_config = self.llm.model_dump()
             agent_overrides = {
                 k: v for k, v in agent_config.model_dump().items() if v is not None
             }
             return LLMConfig(**{**global_config, **agent_overrides})
 
-        return self.LLM
+        return self.llm
 
 
 # 全局配置实例

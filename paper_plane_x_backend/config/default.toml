@@ -1,38 +1,51 @@
 # Paper Plane X backend default configuration
 # You can override this file path via env var: PPX_CONFIG_FILE=/abs/path/to/your.toml
-APP_NAME = "Paper Plane X"
-DEBUG = false
-LOG_LEVEL = "DEBUG"
-LOG_APP_ONLY = true
-LOG_TO_FILE = true
-LOG_FILE_PATH = "./data/logs/backend.log"
-LOG_FILE_MAX_BYTES = 10485760
-LOG_FILE_BACKUP_COUNT = 5
-HOST = "127.0.0.1"
-PORT = 8000
-DATA_DIR = "./data"
-PROMPTS_DIR = "./prompts"
-DATABASE_URL = "sqlite:///./data/app.db"
-MINERU_BASE_URL = "http://localhost:7860"
-MINERU_OUTPUT_DIR = "./data/papers"
-DATA_PROCESS_MAX_RETRIES = 3
-DATA_PROCESS_WORKER_COUNT = 2
+app_name = "Paper Plane X"
+debug = false
+log_level = "DEBUG"
+log_app_only = true
+log_to_file = true
+log_file_path = "./data/logs/backend.log"
+log_file_max_bytes = 10485760
+log_file_backup_count = 5
+host = "127.0.0.1"
+port = 8000
+data_dir = "./data"
+prompts_dir = "./prompts"
+database_url = "sqlite:///./data/app.db"
+mineru_base_url = "http://localhost:7860"
+mineru_output_dir = "./data/papers"
+data_process_max_retries = 3
+data_process_worker_count = 5
+data_process_task_max_seconds = 600.0
 
-[LLM]
+[llm]
 # DeepSeek recommended default model for text generation
-model = "deepseek-chat"
-base_url = "https://api.deepseek.com/v1"
-# Leave empty here and pass api_key via env: LLM__API_KEY=sk-...
+# model = "deepseek-chat"
+# model = "[星一]gemini-3-pro-preview"
+model = "[星一]claude-4-6-sonnet"
+# base_url = "https://api.deepseek.com/v1"
+# base_url = "https://models.sjtu.edu.cn/api/v1"
+base_url = "https://azhexing.com/v1"
+# pass api_key via env: PPX_LLM__API_KEY=sk-...
 api_key = ""
 temperature = 0.7
-max_tokens = 4096
-timeout = 60.0
+max_tokens = 999999
+timeout = 180.0
 is_vlm = false
 
-[AGENT_LLM.extraction]
-model = "deepseek-chat"
+[agent_llm.extraction]
+# model = "deepseek-chat"
+model = "[星一]claude-4-6-sonnet"
 temperature = 0.3
 
-[AGENT_LLM.fact_check]
-model = "deepseek-chat"
+[agent_llm.analysis]
+# model = "deepseek-chat"
+model = "[星一]claude-4-6-sonnet"
+temperature = 0.3
+
+[agent_llm.fact_check]
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-chat"
+model = "[星一]claude-4-6-sonnet"
 temperature = 0.1

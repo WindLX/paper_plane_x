@@ -6,34 +6,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Paper Plane X is an AI Agent-powered research survey workflow system. It uses a multi-agent collaborative approach to help researchers process academic papers and generate literature reviews.
 
-**Core Principles**:
-- Minimalist engineering: No LangGraph/Celery, use FastAPI background tasks + SQLite for state management
-- Strict structured constraints: All Agent I/O validated by Pydantic schemas
-- Human-in-the-loop (HITL): Core decision nodes support suspend/resume with human feedback
-- Absolute fact traceability: All AI-generated content must have precise document anchors, full LLM interaction traces persisted
+Core principles:
+- Minimalist engineering: no LangGraph/Celery, use FastAPI lifespan + SQLite state persistence
+- Strict structured constraints: all Agent I/O validated by Pydantic schemas
+- Human-in-the-loop (HITL): core decision nodes should support suspend/resume with human feedback
+- Absolute fact traceability: persist precise anchors and full LLM interaction traces
 
 ## Tech Stack
 
-- **Backend**: FastAPI, uv (package management), LiteLLM, Pydantic, SQLite (with FTS5), ChromaDB
-- **Frontend**: Vue 3 + Vite + TypeScript + TailwindCSS
-- **Tools**: MinerU (PDF parsing), Pandoc (document export)
+- Backend: FastAPI, uv, LiteLLM, Pydantic, SQLite (FTS5), ChromaDB
+- Frontend: Vue 3 + Vite + TypeScript
+- Tools: MinerU (PDF parsing)
 
 ## Common Commands
 
 ### Backend (paper_plane_x_backend/)
 
 ```bash
-# Navigate to backend
 cd paper_plane_x_backend
 
+# Install dependencies
+uv sync
+
 # Run development server
-uv run fastapi dev src/paper_plane_x_backend/main.py
+uv run uvicorn paper_plane_x_backend.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload
 
 # Run tests
 uv run pytest
 
 # Run single test
-uv run pytest tests/test_file.py::test_function -v
+uv run pytest tests/unit/test_file.py::test_function -v
 
 # Type checking
 uv run pyright
@@ -41,19 +43,11 @@ uv run pyright
 # Linting
 uv run ruff check .
 uv run ruff check --fix .
-
-# Add dependency
-uv add <package>
-uv add --dev <package>
-
-# Sync dependencies
-uv sync
 ```
 
 ### Frontend (paper_plane_x_frontend/)
 
 ```bash
-# Navigate to frontend
 cd paper_plane_x_frontend
 
 # Install dependencies
@@ -62,110 +56,55 @@ pnpm install
 # Development server
 pnpm dev
 
-# Build
-pnpm build
-
-# Preview production build
-pnpm preview
-
 # Type checking
 pnpm vue-tsc
+
+# Build
+pnpm build
 ```
 
 ## Development Status
 
-See `docs/roadmap.md` for detailed phase breakdown.
+See docs/roadmap.md for detailed phase breakdown.
 
-| Phase   | Description                                                  | Status        |
-| ------- | ------------------------------------------------------------ | ------------- |
-| Phase 1 | Project skeleton, SQLite + FTS5, Project CRUD API            | ✅ Complete    |
-| Phase 2 | Agent Engine Core (BaseAgent, LLMClient, Tools)              | ✅ Complete    |
-| Phase 3 | Data Process Workflow (Extraction, FactCheck, queue workers) | ✅ Complete    |
-| Phase 4 | ChromaDB, Librarian, HITL Framework                          | ⏳ In Progress |
-| Phase 5 | Survey Writing Workflow                                      | ⏳ Pending     |
+| Phase   | Description                                                            | Status      |
+| ------- | ---------------------------------------------------------------------- | ----------- |
+| Phase 1 | Project skeleton, SQLite + FTS5, Project/Paper CRUD API                | Complete    |
+| Phase 2 | Agent Engine Core (BaseAgent, LLMClient, Tools)                        | Complete    |
+| Phase 3 | Data Process workflow (Extraction/Analysis/FactCheck, queue workers)   | Complete    |
+| Phase 4 | Librarian MVP, task persistence/recovery, vector retrieval enhancement | In Progress |
+| Phase 5 | HITL framework and Survey writing workflow                             | Pending     |
 
 ## Architecture
 
 ### Layer Structure
 
-```
 App Layer (FastAPI)
-    ↓
-Project Layer (Project management)
-    ↓
-Data-Process Orchestration Layer
-    ↓
-Core Components (Agents, Tools, Database)
-```
+-> Project/Paper API Layer
+-> Data-Process Orchestration Layer
+-> Core Components (Agents, Tools, Database)
 
-### Project Structure
+### Key Source Locations
 
-```
 paper_plane_x_backend/src/paper_plane_x_backend/
-├── main.py              # FastAPI app entry
-├── config.py            # Global configuration, LLM per-agent config
-├── api/                 # REST routers
-│   ├── dependencies.py  # FastAPI dependencies (DB session, etc.)
-│   ├── routers/
-│   │   ├── project.py   # Project + Paper CRUD (complete)
-│   │   ├── data_process.py  # Data-process API router (thin router)
-│   │   └── hitl.py      # Human-in-the-loop endpoints (Phase 4)
-│   └── __init__.py
-├── core/                # Agent runtime core
-│   └── agent_runtime/
-│       ├── base_agent.py # BaseAgent - ReAct loop, structured output
-│       ├── llm_client.py # LLMClient (LiteLLM wrapper)
-│       ├── memory.py     # Short/long memory manager
-│       ├── tooling.py    # Tool registry and schema adapter
-│       └── exceptions.py # Agent error hierarchy
-├── agents/              # Agent wrappers
-│   ├── data_processor.py # ExtractionAgent, FactCheckAgent (complete)
-│   ├── planner.py       # (empty - Phase 5)
-│   ├── writer.py        # (empty - Phase 5)
-│   └── reviewer.py      # (empty - Phase 5)
-├── tools/               # Agent-executable tools
-│   ├── base.py          # Tool, ToolRegistry, @tool decorator
-│   └── librarian.py     # (empty - Phase 4)
-├── services/            # Business logic services
-│   ├── __init__.py
-│   ├── database.py       # SQLite wrapper, FTS5, CRUD operations
-│   ├── data_process_orchestrator.py  # Data-process orchestration service
-│   ├── data_process_task_manager.py  # Queue/worker/task lifecycle manager
-│   └── paper_service.py # Paper processing service
-├── utils/               # External utility wrappers
-│   ├── mineru.py        # PDF parsing via MinerU API
-│   └── pandoc.py        # Document export
-├── models/              # Database models (Pydantic)
-│   └── core.py          # Project, Paper, AgentTrace
-├── schemas/             # I/O schemas (Pydantic)
-│   ├── api.py           # API request/response schemas
-│   ├── messages.py      # OpenAI-compatible message types
-│   ├── agent_io/        # Agent I/O schemas
-│   │   ├── base.py      # Citation, CitedText
-│   │   └── data_processor.py  # QuickScan, SynthesisData, ExtractionAgentOutput
-│   └── state.py         # State machine schemas (future)
-```
+- main.py: FastAPI entry, lifespan startup/shutdown of worker pool
+- config.py: multi-layer config (constructor > env > .env > TOML)
+- api/routers/: project, paper, librarian, data_process, hitl
+- core/agent_runtime/: BaseAgent, LLMClient, memory, tooling, exceptions
+- agents/: data_processor implemented; planner/reviewer/writer are placeholders
+- tools/: tool registry and @tool decorator
+- services/: database, orchestrators, paper services, data_process_tasks, mineru
+- models/core.py: Pydantic domain models
+- schemas/: API and agent I/O schemas
 
-### Key Components
+## Agent Engine
 
-#### Agent Engine (`src/core/agent_runtime/base_agent.py`)
+BaseAgent supports two modes:
+- api mode: single structured generation with schema validation
+- normal mode: free text + tool-calling loop
 
-```python
-class BaseAgent:
-    """Agent base class supporting two modes:
-    - 'api' mode: Forced structured output via Pydantic schema
-    - 'normal' mode: Free text with tool calling loop (ReAct)
-    """
-```
+Typical usage:
 
-**Components**:
-- **Brain**: LLMClient (LiteLLM wrapper)
-- **Long Memory**: System prompt
-- **Short Memory**: Message list (OpenAI-compatible)
-- **Tools**: ToolRegistry with `@tool` decorator
-- **Output Parser**: Pydantic validation with retry logic
-
-**Usage**:
 ```python
 class MyOutput(BaseModel):
     result: str
@@ -178,205 +117,139 @@ agent = BaseAgent(
     llm_config=settings.get_agent_llm_config("extraction"),
 )
 
-result = await agent.run({"input": "data"})  # Returns validated MyOutput
+agent.memory.append_user_message({"input": "data"})
+result = await agent.run()
 ```
 
-#### LLM Client (`src/core/agent_runtime/llm_client.py`)
+Per-agent LLM config is loaded by settings.get_agent_llm_config(agent_name).
 
-```python
-class LLMClient:
-    """LiteLLM wrapper with three modes:
-    - generate(): Plain text generation
-    - generate_with_tools(): Tool calling
-    - generate_structured(): Forced JSON schema output
-    """
-```
+## Database Layer
 
-Per-agent LLM config via `settings.get_agent_llm_config(agent_name)`.
+Storage strategy:
+- SQLite: metadata, state, logs, queue state
+- FTS5: full-text search on selected paper fields
+- No ORM: direct SQL with explicit schema control
 
-#### Database Layer (`src/services/database.py`)
+Key tables:
+- projects: project metadata
+- papers: paper metadata + parsed content + processing states + structured outputs
+- paper_projects: many-to-many relation between project and paper
+- agent_traces: full LLM interaction history and token usage
+- data_process_tasks: persistent queue states
+- papers_fts: FTS5 index table
 
-- **SQLite**: Metadata, state context, operation logs
-- **FTS5**: Full-text search on papers (title, md_content, quick_scan, synthesis_data)
-- **No ORM**: Direct SQL with Pydantic models
+Current paper state fields:
+- extraction_status
+- extraction_fact_check_status
+- analysis_fact_check_status
+- extraction_final_fact_check_trace_id
+- analysis_final_fact_check_trace_id
 
-**Key Tables**:
-- `projects`: Project metadata, data-process state
-- `papers`: Parsed paper data with extraction status + `raw_pdf_path` + `final_fact_check_trace_id`
-- `agent_traces`: Complete LLM interaction history + usage fields (`llm_model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `usage_payload`)
-- `workflow_history`: State transition log
-- `papers_fts`: FTS5 virtual table for full-text search
+## Data-Process Runtime
 
-#### Data-Process Runtime (Phase 3 - Complete)
+Module split:
+- API layer: api/routers/data_process.py
+- Orchestration layer: services/orchestrators/data_process.py
+- Task runtime layer: services/data_process_tasks/task_manager.py
 
-Data Process 任务层已完成框架化拆分：
-- API 层：`api/routers/data_process.py` 仅负责请求校验和错误映射
-- 编排层：`services/data_process_orchestrator.py` 负责业务校验、重试策略与错误边界
-- 任务层：`services/data_process_task_manager.py` 负责队列、worker、取消/失败状态流
+Worker pool lifecycle:
+- Startup in FastAPI lifespan via start_worker_pool()
+- Shutdown via stop_worker_pool()
 
-Data Process 为当前首个任务池实现：
+Runtime capabilities:
+- Queue status query
+- Task cancellation
+- Retry for failed/canceled tasks
+- SQLite-backed task persistence with startup recovery
 
-```
-Single PDF Upload API
-    ↓
-Create pending paper record
-    ↓
-Save original PDF to data/papers/{paper_id}/original.<ext>
-    ↓
-Enqueue task to in-memory queue
-    ↓
-Worker pool consumes task (parse → extract → fact-check)
-    ↓
-SQLite update + FTS5 sync
-```
+## Librarian
 
-**Data Schemas** (`schemas/agent_io/data_processor.py`):
-- `QuickScan`: Tags, verdict, reason, quick_summary
-- `SynthesisData`: ResearchGap, Methodology, KeyResults, review_summary
-- `CitedText`: All fields require `citations` with exact quotes from source
+Current API-level capabilities:
+- POST /api/v1/librarian/projection
+- POST /api/v1/librarian/matrix
+- POST /api/v1/librarian/search
+- POST /api/v1/projects/{project_id}/search
 
-#### Tool System (`src/tools/base.py`)
+Status:
+- MVP available for projection, matrix comparison, and unified condition search
+- Further retrieval fusion/vector enhancement is still in progress
 
-```python
-@tool()
-async def search_papers(query: str, limit: int = 10) -> list[dict]:
-    """Search papers by keyword"""
-    ...
+## Configuration System
 
-# Tools auto-convert to OpenAI function schema
-agent = BaseAgent(tools=[search_papers])
-```
+Priority (high to low):
+1. Constructor arguments
+2. Environment variables
+3. .env file
+4. TOML config (config/default.toml, override by PPX_CONFIG_FILE)
 
-## State Machine Design
+Common settings:
+- DATABASE_URL, DATA_DIR
+- LLM and AGENT_LLM.*
+- MINERU_BASE_URL, MINERU_OUTPUT_DIR
+- DATA_PROCESS_WORKER_COUNT, DATA_PROCESS_MAX_RETRIES, DATA_PROCESS_SHUTDOWN_TIMEOUT
+- LOG_LEVEL, LOG_TO_FILE, LOG_APP_ONLY, LOG_FILE_PATH
 
-Workflow states (`models/core.py`):
-- `IDLE`: Not started
-- `RUNNING`: In progress
-- `WAITING_FOR_HUMAN`: Suspended at HITL checkpoint
-- `COMPLETED`: Successfully finished
-- `FAILED`: Error state
+Prompt files are loaded via settings.load_prompt(group, filename) from prompts/.
 
-State transitions persisted to SQLite with full context for resume capability.
+## Logging
+
+- Console + rotating file handler (default: data/logs/backend.log)
+- LOG_APP_ONLY=true narrows logs to paper_plane_x_backend namespace
 
 ## Testing Strategy
 
-- **Unit tests**: Agent logic, tool functions, validation
-- **Integration tests**: Full workflow with mocked LLM
-- **No database mocking**: Use test SQLite instance
+- Unit tests: agent runtime, services, models, config, tools
+- Integration tests: key API and workflow paths
+- No DB mocking for core flows, prefer real SQLite test database
 
-**Test Layout**:
-- `tests/unit/`: unit tests for agent runtime, services, models, config
-- `tests/integration/`: API and workflow integration tests
-- `tests/conftest.py`: Shared fixtures (client, test DB)
-
-**Run Tests**:
-```bash
-uv run pytest -v
-```
-
-## Agent Development Pattern
-
-1. **Define output schema** in `schemas/agent_io/`:
-```python
-class MyAgentOutput(BaseModel):
-    field1: str
-    field2: list[str]
-```
-
-2. **Create agent** inheriting from `BaseAgent`:
-```python
-class MyAgent:
-    def __init__(self, config: Config):
-        self.agent = BaseAgent(
-            output_schema=MyAgentOutput,
-            mode="api",
-            llm_config=settings.get_agent_llm_config("my_agent"),
-        )
-
-    async def run(self, input_data: dict) -> MyAgentOutput:
-        return await self.agent.run(input_data)
-```
-
-3. **Agent handles automatically**:
-   - Tool calling loop
-   - Output validation with retry
-   - Trace logging to `agent_traces` table
-   - Error handling (AgentValidationError, AgentExecutionError)
-
-## Configuration
-
-Environment variables (`.env`):
-```bash
-# Application
-APP_NAME="Paper Plane X"
-DEBUG=true
-LOG_LEVEL=INFO
-
-# Server
-HOST=127.0.0.1
-PORT=8000
-
-# Database
-DATABASE_URL=sqlite:///./data/app.db
-DATA_DIR=./data
-
-# LLM Global Default
-LLM__MODEL=gpt-4o
-LLM__API_KEY=sk-...
-LLM__BASE_URL=  # For VLLM: http://localhost:8000/v1
-LLM__TEMPERATURE=0.7
-LLM__MAX_TOKENS=4096
-
-# Per-Agent LLM Config (optional, overrides global)
-LLM__EXTRACTION__MODEL=gpt-4o-mini
-LLM__FACT_CHECK__TEMPERATURE=0.1
-
-# MinerU (PDF parsing)
-MINERU_BASE_URL=http://localhost:8000
-MINERU_OUTPUT_DIR=./data/papers
-
-# Data Process Task Pool
-DATA_PROCESS_MAX_RETRIES=3
-DATA_PROCESS_WORKER_COUNT=2
-```
-
-## HITL (Human-in-the-Loop)
-
-When agents need human input:
-- Agent calls `AskHuman` tool with question/context
-- Workflow state saved to `WAITING_FOR_HUMAN`
-- Frontend polls/pushes for human response
-- Human submits feedback via API
-- Workflow resumes with injected feedback
-
-*(Implementation pending Phase 4)*
+Test layout:
+- tests/unit/
+- tests/integration/
+- tests/conftest.py
 
 ## API Endpoints
 
-Current implemented endpoints:
+Health:
+- GET /health
 
-```
-GET  /health                    # Health check
+Projects:
+- POST /api/v1/projects
+- GET /api/v1/projects
+- GET /api/v1/projects/{project_id}
+- PATCH /api/v1/projects/{project_id}
+- DELETE /api/v1/projects/{project_id}
 
-# Projects
-POST   /api/v1/projects                         # Create project
-GET    /api/v1/projects                         # List projects (paginated)
-GET    /api/v1/projects/{id}                    # Get project
-PATCH  /api/v1/projects/{id}                    # Update project
-DELETE /api/v1/projects/{id}                    # Delete project
+Project-Paper relation:
+- GET /api/v1/projects/{project_id}/papers
+- POST /api/v1/projects/{project_id}/papers/{paper_id}
+- DELETE /api/v1/projects/{project_id}/papers/{paper_id}
+- POST /api/v1/projects/{project_id}/search
 
-# Papers
-GET    /api/v1/projects/{id}/papers             # List project papers
-GET    /api/v1/projects/{id}/papers/{paper_id}  # Get paper detail
-DELETE /api/v1/projects/{id}/papers/{paper_id}  # Delete paper (blocked when processing)
+Papers:
+- POST /api/v1/papers
+- GET /api/v1/papers
+- GET /api/v1/papers/{paper_id}
+- PATCH /api/v1/papers/{paper_id}
+- POST /api/v1/papers/{paper_id}/reprocess
+- DELETE /api/v1/papers/{paper_id}
 
-# Data Process (Phase 3 - Complete)
-POST /api/v1/projects/{id}/data-process      # Async data processing
-POST /api/v1/projects/{id}/data-process/{paper_id}/retry  # Re-upload and retry same paper ID
-GET  /api/v1/projects/{id}/data-process/tasks             # Task queue status
-POST /api/v1/projects/{id}/data-process/tasks/{task_id}/cancel         # Cancel queued/running task
-POST /api/v1/projects/{id}/data-process/tasks/{task_id}/retry          # Retry failed/canceled task
+Data Process tasks:
+- GET /api/v1/data-process/tasks
+- POST /api/v1/data-process/tasks/{task_id}/cancel
+- POST /api/v1/data-process/tasks/{task_id}/retry
 
-# HITL (Phase 4)
-POST /api/v1/hitl/{project_id}/feedback               # Submit human feedback
-```
+Librarian:
+- POST /api/v1/librarian/projection
+- POST /api/v1/librarian/matrix
+- POST /api/v1/librarian/search
+
+HITL:
+- Prefix only: /api/v1/hitl (business endpoints pending)
+
+## Notes on DB Schema Changes
+
+Database is now in active use. For any schema change, must implement both:
+1. Migration logic (add columns / rename compatibility / legacy copy)
+2. Automatic pre-migration backup (recommended before init_tables migration step, timestamped under data/backups)
+
+For legacy field renames, prefer copy-then-compatibility strategy to avoid runtime breakage on existing production databases.

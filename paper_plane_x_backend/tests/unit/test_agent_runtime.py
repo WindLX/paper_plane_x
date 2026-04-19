@@ -37,10 +37,9 @@ class TestBaseAgent:
     async def _run_with_input(
         agent: BaseAgent,
         user_input: dict[str, object],
-        project_id: str = "unknown",
     ) -> BaseModel | str:
         agent.memory.append_user_message(user_input)
-        return await agent.run(project_id=project_id)
+        return await agent.run()
 
     @pytest.mark.asyncio
     async def test_api_mode_simple_agent(self) -> None:
@@ -132,6 +131,135 @@ class TestBaseAgent:
         assert isinstance(result, SimpleOutput)
         assert result.answer == "Recovered"
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_api_mode_accepts_json_with_prefix_suffix_noise(self) -> None:
+        """测试 api 模式可从前后噪声文本中提取 JSON object。"""
+        agent = BaseAgent(
+            output_schema=SimpleOutput,
+            mode="api",
+            max_steps=2,
+            save_trace=False,
+        )
+
+        async def mock_generate_structured(
+            messages, output_schema, **kwargs
+        ) -> LLMResponse:
+            return LLMResponse(
+                content='Result below: {"answer": "Noisy OK"} -- done',
+                model="gpt-4o",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "x"})
+        assert isinstance(result, SimpleOutput)
+        assert result.answer == "Noisy OK"
+
+    @pytest.mark.asyncio
+    async def test_api_mode_accepts_markdown_json_fence(self) -> None:
+        """测试 api 模式可从 markdown json 代码块中提取 JSON object。"""
+        agent = BaseAgent(
+            output_schema=SimpleOutput,
+            mode="api",
+            max_steps=2,
+            save_trace=False,
+        )
+
+        async def mock_generate_structured(
+            messages, output_schema, **kwargs
+        ) -> LLMResponse:
+            return LLMResponse(
+                content='Here you go:\n```json\n{"answer": "Fence OK"}\n```\nextra',
+                model="gpt-4o",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "x"})
+        assert isinstance(result, SimpleOutput)
+        assert result.answer == "Fence OK"
+
+    @pytest.mark.asyncio
+    async def test_api_mode_fallbacks_when_fence_json_invalid(self) -> None:
+        """测试 json 代码块无效时可回退提取正文合法 JSON。"""
+        agent = BaseAgent(
+            output_schema=SimpleOutput,
+            mode="api",
+            max_steps=2,
+            save_trace=False,
+        )
+
+        async def mock_generate_structured(
+            messages, output_schema, **kwargs
+        ) -> LLMResponse:
+            return LLMResponse(
+                content=(
+                    '```json\n{"answer": }\n```\n' 'final={"answer": "Fallback OK"}'
+                ),
+                model="gpt-4o",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "x"})
+        assert isinstance(result, SimpleOutput)
+        assert result.answer == "Fallback OK"
+
+    @pytest.mark.asyncio
+    async def test_api_mode_sanitizes_unescaped_latex_backslashes(self) -> None:
+        """测试 api 模式可修复字符串内未转义反斜杠（如 LaTeX）。"""
+        agent = BaseAgent(
+            output_schema=SimpleOutput,
+            mode="api",
+            max_steps=2,
+            save_trace=False,
+        )
+
+        async def mock_generate_structured(
+            messages, output_schema, **kwargs
+        ) -> LLMResponse:
+            return LLMResponse(
+                content='{"answer": "Equation: \\alpha + \\gamma"}',
+                model="gpt-4o",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "latex"})
+        assert isinstance(result, SimpleOutput)
+        assert result.answer == r"Equation: \alpha + \gamma"
+
+    @pytest.mark.asyncio
+    async def test_api_mode_sanitizes_mixed_escaped_and_unescaped_backslashes(
+        self,
+    ) -> None:
+        """测试混合场景：同一字符串中部分反斜杠已转义，部分未转义。"""
+        agent = BaseAgent(
+            output_schema=SimpleOutput,
+            mode="api",
+            max_steps=2,
+            save_trace=False,
+        )
+
+        async def mock_generate_structured(
+            messages, output_schema, **kwargs
+        ) -> LLMResponse:
+            return LLMResponse(
+                content='{"answer": "Mixed: \\\\beta + \\gamma + \\delta"}',
+                model="gpt-4o",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "latex-mixed"})
+        assert isinstance(result, SimpleOutput)
+        assert result.answer == r"Mixed: \beta + \gamma + \delta"
 
     @pytest.mark.asyncio
     async def test_normal_mode_simple_output(self) -> None:

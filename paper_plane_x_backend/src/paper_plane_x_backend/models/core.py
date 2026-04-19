@@ -115,12 +115,12 @@ class Paper(BaseModel):
 
     # 基础信息
     paper_id: str = Field(..., description="唯一标识 (UUID)")
-    project_id: str = Field(..., description="所属项目 ID")
     title: str | None = Field(default=None, description="论文标题")
     authors: list[str] = Field(default_factory=list, description="作者列表")
     year: int | None = Field(default=None, description="发表年份")
-    venue: str | None = Field(default=None, description="发表 venue")
+    publication: str | None = Field(default=None, description="发表刊物/会议")
     doi: str | None = Field(default=None, description="DOI")
+    custom_meta: str | None = Field(default=None, description="自定义 JSON 字符串")
 
     # 阶段一: MinerU 解析产物
     md_content: str | None = Field(default=None, description="原始 Markdown 文本")
@@ -150,25 +150,47 @@ class Paper(BaseModel):
         default=None,
         description="深度综述数据 (SynthesisData 结构)",
     )
+    analysis_report: dict[str, Any] | None = Field(
+        default=None,
+        description="理论分析报告 (AnalysisReport 结构)",
+    )
 
-    # 阶段三: Fact Check 产物 (对应 agent_io.FactCheckAgentOutput)
-    fact_check_status: FactCheckStatus = Field(
+    # 阶段三: Extraction 分支 Fact Check 产物
+    extraction_fact_check_status: FactCheckStatus = Field(
         default=FactCheckStatus.PENDING,
-        description="核查状态: PENDING, PASSED, FAILED",
+        description="Extraction 分支核查状态: PENDING, PASSED, FAILED",
     )
-    fact_check_result: dict[str, Any] | None = Field(
+    extraction_fact_check_result: dict[str, Any] | None = Field(
         default=None,
-        description="事实核查详细结果 (FactCheckAgentOutput 结构)",
+        description="Extraction 分支事实核查结果 (FactCheckAgentOutput 结构)",
     )
-    final_fact_check_trace_id: str | None = Field(
+    extraction_final_fact_check_trace_id: str | None = Field(
         default=None,
-        description="提取-核查闭环最终对应的 FactCheckAgent trace_id",
+        description="Extraction 分支闭环最终对应的 FactCheckAgent trace_id",
+    )
+
+    # 阶段四: Analysis 分支 Fact Check 产物
+    analysis_fact_check_status: FactCheckStatus = Field(
+        default=FactCheckStatus.PENDING,
+        description="Analysis 分支核查状态: PENDING, PASSED, FAILED",
+    )
+    analysis_fact_check_result: dict[str, Any] | None = Field(
+        default=None,
+        description="Analysis 分支事实核查结果 (FactCheckAgentOutput 结构)",
+    )
+    analysis_final_fact_check_trace_id: str | None = Field(
+        default=None,
+        description="Analysis 分支闭环最终对应的 FactCheckAgent trace_id",
     )
 
     # 重试计数
     extraction_retry_count: int = Field(
         default=0,
-        description="提取重试次数",
+        description="Extraction 分支重试次数",
+    )
+    analysis_retry_count: int = Field(
+        default=0,
+        description="Analysis 分支重试次数",
     )
 
     created_at: datetime = Field(..., description="创建时间")
@@ -179,24 +201,62 @@ class Paper(BaseModel):
         """从数据库行创建模型实例."""
         data = dict(row)
 
+        # 兼容历史列名 venue，优先使用 publication。
+        if data.get("publication") is None and data.get("venue") is not None:
+            data["publication"] = data["venue"]
+        data.pop("venue", None)
+
         # SQLite 返回字符串，需要在 strict 模式下显式转换为枚举
         if isinstance(data.get("extraction_status"), str):
             data["extraction_status"] = ExtractionStatus(data["extraction_status"])
-        if isinstance(data.get("fact_check_status"), str):
-            data["fact_check_status"] = FactCheckStatus(data["fact_check_status"])
+
+        # 兼容旧列名: fact_check_* -> extraction_fact_check_*
+        if (
+            data.get("extraction_fact_check_status") is None
+            and data.get("fact_check_status") is not None
+        ):
+            data["extraction_fact_check_status"] = data["fact_check_status"]
+        if (
+            data.get("extraction_fact_check_result") is None
+            and data.get("fact_check_result") is not None
+        ):
+            data["extraction_fact_check_result"] = data["fact_check_result"]
+        if (
+            data.get("extraction_final_fact_check_trace_id") is None
+            and data.get("final_fact_check_trace_id") is not None
+        ):
+            data["extraction_final_fact_check_trace_id"] = data[
+                "final_fact_check_trace_id"
+            ]
+
+        if isinstance(data.get("extraction_fact_check_status"), str):
+            data["extraction_fact_check_status"] = FactCheckStatus(
+                data["extraction_fact_check_status"]
+            )
+        if isinstance(data.get("analysis_fact_check_status"), str):
+            data["analysis_fact_check_status"] = FactCheckStatus(
+                data["analysis_fact_check_status"]
+            )
 
         json_fields = [
             "authors",
             "images_paths",
             "quick_scan",
             "synthesis_data",
-            "fact_check_result",
+            "analysis_report",
+            "extraction_fact_check_result",
+            "analysis_fact_check_result",
         ]
         for field in json_fields:
             if data.get(field) and isinstance(data[field], str):
                 data[field] = json.loads(data[field])
             elif field in ["authors", "images_paths"] and data.get(field) is None:
                 data[field] = []  # 确保这两个字段至少是空列表
+
+        data.pop("fact_check_status", None)
+        data.pop("fact_check_result", None)
+        data.pop("final_fact_check_trace_id", None)
+
         return cls.model_validate(data)
 
     def to_db_dict(self) -> dict[str, Any]:
@@ -208,7 +268,9 @@ class Paper(BaseModel):
             "images_paths",
             "quick_scan",
             "synthesis_data",
-            "fact_check_result",
+            "analysis_report",
+            "extraction_fact_check_result",
+            "analysis_fact_check_result",
         ]
         for field in json_fields:
             if data.get(field) is not None:
@@ -222,7 +284,6 @@ class AgentTrace(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     trace_id: str = Field(..., description="唯一标识 (UUID)")
-    project_id: str = Field(..., description="所属项目 ID")
     agent_name: str = Field(..., description="Agent 名称")
     latest_input_message: dict[str, Any] | None = Field(
         default=None, description="执行时记忆中的最新消息"

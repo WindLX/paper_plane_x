@@ -3,10 +3,12 @@
 实现可复用的 BaseAgent 框架，支持结构化输出和 ReAct 循环。
 """
 
+import asyncio
 import json
 import logging
+import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
@@ -62,7 +64,7 @@ class BaseAgent:
             for tool in tools:
                 self.tool_registry.register(tool)
 
-        config = llm_config or settings.LLM
+        config = llm_config or settings.llm
         self.llm = LLMClient.from_config(config)
         self.memory = MemoryManager(
             system_prompt=system_prompt or "",
@@ -78,17 +80,230 @@ class BaseAgent:
             )
         return self.output_schema
 
-    def _validate_output(self, content: str) -> BaseModel:
+    @staticmethod
+    def _sanitize_json_string_escapes(raw: str) -> str:
+        """修复 JSON 字符串内部非法转义（常见于未转义 LaTeX 反斜杠）。"""
+        valid_escape_chars = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
+        result: list[str] = []
+        in_string = False
+        idx = 0
+        length = len(raw)
+
+        while idx < length:
+            ch = raw[idx]
+
+            if not in_string:
+                result.append(ch)
+                if ch == '"':
+                    in_string = True
+                idx += 1
+                continue
+
+            if ch == '"':
+                in_string = False
+                result.append(ch)
+                idx += 1
+                continue
+
+            if ch == "\\":
+                if idx + 1 >= length:
+                    result.append("\\\\")
+                    idx += 1
+                    continue
+
+                next_char = raw[idx + 1]
+                if next_char in valid_escape_chars:
+                    result.append("\\")
+                    result.append(next_char)
+                    idx += 2
+                    continue
+
+                # 对于非法转义（例如 \alpha 的 \a），补一个反斜杠使其成为字面量
+                result.append("\\\\")
+                idx += 1
+                continue
+
+            result.append(ch)
+            idx += 1
+
+        return "".join(result)
+
+    @staticmethod
+    def _load_json_object_candidate(raw: str) -> dict[str, Any] | None:
         try:
-            data = json.loads(content)
-            output_schema = self._get_output_schema()
-            return output_schema.model_validate(data)
-        except json.JSONDecodeError as e:
+            loaded: Any = json.loads(raw)
+        except json.JSONDecodeError:
+            sanitized = BaseAgent._sanitize_json_string_escapes(raw)
+            if sanitized == raw:
+                return None
+            logger.debug(
+                "event=agent.json_sanitize_applied stage=candidate candidate_length=%s sanitized_length=%s",
+                len(raw),
+                len(sanitized),
+            )
+            try:
+                loaded = json.loads(sanitized)
+            except json.JSONDecodeError:
+                logger.debug(
+                    "event=agent.json_sanitize_failed stage=candidate candidate_length=%s",
+                    len(raw),
+                )
+                return None
+        if isinstance(loaded, dict):
+            return cast(dict[str, Any], loaded)
+        return None
+
+    def _extract_json_candidates_from_code_fences(self, content: str) -> list[str]:
+        fence_pattern = re.compile(r"```([^\n`]*)\n?([\s\S]*?)```")
+        json_fences: list[str] = []
+        other_fences: list[str] = []
+
+        for match in fence_pattern.finditer(content):
+            language = (match.group(1) or "").strip().lower()
+            candidate = (match.group(2) or "").strip()
+            if not candidate:
+                continue
+            if language == "json":
+                json_fences.append(candidate)
+            else:
+                other_fences.append(candidate)
+
+        return json_fences + other_fences
+
+    def _extract_json_candidates_from_text(self, content: str) -> list[str]:
+        candidates: list[str] = []
+        length = len(content)
+
+        for start in range(length):
+            if content[start] != "{":
+                continue
+
+            depth = 0
+            in_string = False
+            escaped = False
+
+            for end in range(start, length):
+                ch = content[end]
+
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+
+                if ch == '"':
+                    in_string = True
+                    continue
+
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = content[start : end + 1].strip()
+                        if candidate:
+                            candidates.append(candidate)
+                        break
+                    if depth < 0:
+                        break
+
+        return candidates
+
+    def _collect_json_object_candidates(
+        self, content: str
+    ) -> list[tuple[int, dict[str, Any]]]:
+        candidates: list[tuple[int, dict[str, Any]]] = []
+
+        raw_candidates: list[str] = []
+        raw_candidates.extend(self._extract_json_candidates_from_code_fences(content))
+        raw_candidates.extend(self._extract_json_candidates_from_text(content))
+
+        seen_raw: set[str] = set()
+        for raw in raw_candidates:
+            normalized = raw.strip()
+            if not normalized or normalized in seen_raw:
+                continue
+            seen_raw.add(normalized)
+
+            loaded = self._load_json_object_candidate(normalized)
+            if loaded is not None:
+                candidates.append((len(normalized), loaded))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates
+
+    def _validate_output(self, content: str) -> BaseModel:
+        output_schema = self._get_output_schema()
+
+        try:
+            direct_loaded = json.loads(content)
+            if not isinstance(direct_loaded, dict):
+                raise AgentValidationError(
+                    message="Invalid JSON output: root type must be JSON object",
+                    agent_name=self.agent_name,
+                    raw_output=content,
+                )
+            return output_schema.model_validate(direct_loaded)
+        except json.JSONDecodeError:
+            sanitized = self._sanitize_json_string_escapes(content)
+            if sanitized != content:
+                logger.debug(
+                    "event=agent.json_sanitize_applied stage=direct content_length=%s sanitized_length=%s",
+                    len(content),
+                    len(sanitized),
+                )
+                try:
+                    direct_loaded = json.loads(sanitized)
+                    if not isinstance(direct_loaded, dict):
+                        raise AgentValidationError(
+                            message="Invalid JSON output: root type must be JSON object",
+                            agent_name=self.agent_name,
+                            raw_output=content,
+                        )
+                    return output_schema.model_validate(direct_loaded)
+                except json.JSONDecodeError:
+                    logger.debug(
+                        "event=agent.json_sanitize_failed stage=direct content_length=%s",
+                        len(content),
+                    )
+                    pass
+
+        json_candidates = self._collect_json_object_candidates(content)
+        if not json_candidates:
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as e:
+                raise AgentValidationError(
+                    message=f"Invalid JSON output: {e}",
+                    agent_name=self.agent_name,
+                    raw_output=content,
+                ) from e
+
             raise AgentValidationError(
-                message=f"Invalid JSON output: {e}",
+                message="Invalid JSON output: root type must be JSON object",
                 agent_name=self.agent_name,
                 raw_output=content,
-            ) from e
+            )
+
+        last_validation_error: ValidationError | None = None
+        try:
+            for _, data in json_candidates:
+                try:
+                    return output_schema.model_validate(data)
+                except ValidationError as e:
+                    last_validation_error = e
+
+            if last_validation_error is not None:
+                raise last_validation_error
+
+            raise AgentValidationError(
+                message="Schema validation failed: no valid JSON object candidate",
+                agent_name=self.agent_name,
+                raw_output=content,
+            )
         except ValidationError as e:
             raise AgentValidationError(
                 message=f"Schema validation failed: {e}",
@@ -102,7 +317,6 @@ class BaseAgent:
         latest_input_message: dict[str, Any] | None,
         output: str,
         messages: list[dict[str, Any]],
-        project_id: str,
         *,
         llm_model: str | None = None,
         usage: dict[str, Any] | None = None,
@@ -113,7 +327,6 @@ class BaseAgent:
             trace_id = str(uuid4())
             trace = AgentTrace(
                 trace_id=trace_id,
-                project_id=project_id,
                 agent_name=self.agent_name,
                 latest_input_message=latest_input_message,
                 output_message=output,
@@ -129,17 +342,15 @@ class BaseAgent:
             self.last_trace_id = trace_id
         except Exception as e:
             logger.warning(
-                "event=agent.trace_save_failed agent=%s project_id=%s error=%s",
+                "event=agent.trace_save_failed agent=%s error=%s",
                 self.agent_name,
-                project_id,
                 e,
             )
 
-    async def _run_api(self, project_id: str) -> BaseModel:
+    async def _run_api(self) -> BaseModel:
         logger.info(
-            "event=agent.run_started agent=%s mode=api project_id=%s",
+            "event=agent.run_started agent=%s mode=api",
             self.agent_name,
-            project_id,
         )
         if not self.memory.has_role_message("user"):
             raise AgentExecutionError(
@@ -168,7 +379,6 @@ class BaseAgent:
                         latest_input_message=self.memory.get_latest_message(),
                         output=content,
                         messages=self.memory.dump_messages(),
-                        project_id=project_id,
                         llm_model=response.model,
                         usage=response.usage,
                     )
@@ -180,18 +390,16 @@ class BaseAgent:
                 )
 
                 logger.info(
-                    "event=agent.run_completed agent=%s mode=api project_id=%s step=%s",
+                    "event=agent.run_completed agent=%s mode=api step=%s",
                     self.agent_name,
-                    project_id,
                     step + 1,
                 )
                 return validated_output
             except AgentValidationError as e:
                 last_validation_error = e
                 logger.warning(
-                    "event=agent.validation_retry agent=%s project_id=%s step=%s max_steps=%s error=%s",
+                    "event=agent.validation_retry agent=%s step=%s max_steps=%s error=%s",
                     self.agent_name,
-                    project_id,
                     step + 1,
                     self.max_steps,
                     e.message,
@@ -203,11 +411,17 @@ class BaseAgent:
 
                 error_detail = e.validation_errors if e.validation_errors else e.message
                 self.memory.append_validation_feedback(error_detail)
+            except asyncio.CancelledError:
+                logger.info(
+                    "event=agent.run_canceled agent=%s mode=api step=%s",
+                    self.agent_name,
+                    step + 1,
+                )
+                raise
             except Exception as e:
                 logger.exception(
-                    "event=agent.run_failed agent=%s mode=api project_id=%s step=%s max_steps=%s",
+                    "event=agent.run_failed agent=%s mode=api step=%s max_steps=%s",
                     self.agent_name,
-                    project_id,
                     step + 1,
                     self.max_steps,
                 )
@@ -225,11 +439,10 @@ class BaseAgent:
             step_count=self.max_steps,
         )
 
-    async def _run_normal(self, project_id: str) -> str:
+    async def _run_normal(self) -> str:
         logger.info(
-            "event=agent.run_started agent=%s mode=normal project_id=%s",
+            "event=agent.run_started agent=%s mode=normal",
             self.agent_name,
-            project_id,
         )
         if not self.memory.has_role_message("user"):
             raise AgentExecutionError(
@@ -245,7 +458,6 @@ class BaseAgent:
                     latest_input_message=self.memory.get_latest_message(),
                     output=content,
                     messages=self.memory.dump_messages(),
-                    project_id=project_id,
                     llm_model=response.model,
                     usage=response.usage,
                 )
@@ -253,9 +465,8 @@ class BaseAgent:
             self.memory.append_assistant_message(content=content, name=self.agent_name)
 
             logger.info(
-                "event=agent.run_completed agent=%s mode=normal project_id=%s step=1",
+                "event=agent.run_completed agent=%s mode=normal step=1",
                 self.agent_name,
-                project_id,
             )
             return content
 
@@ -278,7 +489,6 @@ class BaseAgent:
                         latest_input_message=self.memory.get_latest_message(),
                         output=response.content or "",
                         messages=self.memory.dump_messages(),
-                        project_id=project_id,
                         llm_model=response.model,
                         usage=response.usage,
                     )
@@ -302,11 +512,17 @@ class BaseAgent:
                     continue
 
                 content = response.content
+            except asyncio.CancelledError:
+                logger.info(
+                    "event=agent.run_canceled agent=%s mode=normal step=%s",
+                    self.agent_name,
+                    step + 1,
+                )
+                raise
             except Exception as e:
                 logger.exception(
-                    "event=agent.run_failed agent=%s mode=normal project_id=%s step=%s max_steps=%s",
+                    "event=agent.run_failed agent=%s mode=normal step=%s max_steps=%s",
                     self.agent_name,
-                    project_id,
                     step + 1,
                     self.max_steps,
                 )
@@ -318,9 +534,8 @@ class BaseAgent:
 
             final_content = content or ""
             logger.info(
-                "event=agent.run_completed agent=%s mode=normal project_id=%s step=%s",
+                "event=agent.run_completed agent=%s mode=normal step=%s",
                 self.agent_name,
-                project_id,
                 step + 1,
             )
             return final_content
@@ -331,11 +546,8 @@ class BaseAgent:
             step_count=self.max_steps,
         )
 
-    async def run(
-        self,
-        project_id: str = "unknown",
-    ) -> BaseModel | str:
+    async def run(self) -> BaseModel | str:
         self.last_trace_id = None
         if self.mode == "api":
-            return await self._run_api(project_id)
-        return await self._run_normal(project_id)
+            return await self._run_api()
+        return await self._run_normal()

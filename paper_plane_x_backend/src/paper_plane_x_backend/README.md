@@ -4,16 +4,14 @@
 
 ## 目录结构
 
-- api
-	- FastAPI 路由与依赖注入
+- api/routers
+	- FastAPI 路由（project、paper、data_process、hitl）
+- services/orchestrators
+	- 业务编排入口（project、paper、data_process）
 - services
-	- 业务编排与任务执行
+	- 数据访问与任务管理（paper/repository、database、data_process_tasks）
 - core/agent_runtime
-	- BaseAgent、LLMClient、memory、tooling
-- agents
-	- Extraction/FactCheck 等 Agent 封装
-- models
-	- Pydantic 数据模型
+	- Agent 运行时（BaseAgent、LLMClient、tooling、memory）
 - schemas
 	- API 与 Agent I/O schema
 - tools
@@ -21,16 +19,19 @@
 
 ## Data Process 主链路
 
-1. API 接收上传请求
-2. orchestrator 落盘与业务校验
-3. task_manager 入队并由 worker 执行
-4. paper_service 执行解析、提取、核查、回写
+1. `POST /api/v1/papers` 接收上传请求并创建/复用论文。
+2. `orchestrators/paper.py` 触发 `orchestrators/data_process.py` 入队任务。
+3. `data_process_tasks/task_manager.py` 持久化任务并由 worker 池执行。
+4. `paper/` 目录下 `parser.py`、`processor.py`、`repository.py` 分别执行解析、提取编排与数据访问。
 
 关键文件：
 
-- services/data_process_orchestrator.py
-- services/data_process_task_manager.py
-- services/paper_service.py
+- services/orchestrators/paper.py
+- services/orchestrators/data_process.py
+- services/orchestrators/project.py
+- services/data_process_tasks/
+- services/paper/
+- api/routers/paper.py
 - api/routers/data_process.py
 
 ## 代码约定
@@ -38,4 +39,4 @@
 - 不使用 ORM，统一走 SQLite 原生封装。
 - 业务错误在服务层收敛，路由层负责 HTTP 映射。
 - Agent 输出必须通过 schema 校验。
-- 关键流程日志统一采用 event= 字段。
+- 关键流程日志统一采用 `event=` 字段。

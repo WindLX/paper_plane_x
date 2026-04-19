@@ -5,15 +5,18 @@
 - 编排器：DataProcessorAgentGroup（提取-核查闭环）
 """
 
+import asyncio
 import json
 import logging
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 from pydantic import BaseModel
 
 from paper_plane_x_backend.config import LLMConfig, settings
 from paper_plane_x_backend.core.agent_runtime import BaseAgent
 from paper_plane_x_backend.schemas.agent_io.data_processor import (
+    AnalysisAgentOutput,
+    AnalysisAgentUserInput,
     ExtractionAgentOutput,
     ExtractionAgentUserInput,
     FactCheckAgentOutput,
@@ -90,8 +93,8 @@ class StructuredDataProcessorAgent(Generic[TOutput]):
             name=name,
         )
 
-    async def run(self, project_id: str) -> TOutput:
-        result = await self._agent.run(project_id=project_id)
+    async def run(self) -> TOutput:
+        result = await self._agent.run()
         assert isinstance(result, self.output_schema), (
             f"Expected output of type {self.output_schema.__name__}, "
             f"but got {type(result).__name__}"
@@ -110,6 +113,22 @@ class ExtractionAgent(StructuredDataProcessorAgent[ExtractionAgentOutput]):
     @staticmethod
     def build_user_message(md_content: str, images: list[str]) -> dict[str, Any]:
         return ExtractionAgentUserInput(
+            md_content=md_content,
+            images=images,
+        ).model_dump()
+
+
+class AnalysisAgent(StructuredDataProcessorAgent[AnalysisAgentOutput]):
+    """理论分析 Agent。"""
+
+    output_schema = AnalysisAgentOutput
+    agent_name = "AnalysisAgent"
+    llm_config_name = "analysis"
+    prompt_filename = "Analysis.md"
+
+    @staticmethod
+    def build_user_message(md_content: str, images: list[str]) -> dict[str, Any]:
+        return AnalysisAgentUserInput(
             md_content=md_content,
             images=images,
         ).model_dump()
@@ -137,16 +156,20 @@ class DataProcessorAgentGroup:
     def __init__(
         self,
         extraction_agent: ExtractionAgent | None = None,
-        fact_check_agent: FactCheckAgent | None = None,
+        fact_check_agent1: FactCheckAgent | None = None,
+        analysis_agent: AnalysisAgent | None = None,
+        fact_check_agent2: FactCheckAgent | None = None,
     ) -> None:
         self.extraction_agent = extraction_agent or ExtractionAgent()
-        self.fact_check_agent = fact_check_agent or FactCheckAgent()
-        self.last_fact_check_trace_id: str | None = None
+        self.fact_check_agent1 = fact_check_agent1 or FactCheckAgent()
+        self.analysis_agent = analysis_agent or AnalysisAgent()
+        self.fact_check_agent2 = fact_check_agent2 or FactCheckAgent()
+        self.extraction_last_fact_check_trace_id: str | None = None
+        self.analysis_last_fact_check_trace_id: str | None = None
 
     async def run_extraction_fact_check_loop(
         self,
         *,
-        project_id: str,
         md_content: str,
         images: list[str],
         max_retries: int,
@@ -154,70 +177,70 @@ class DataProcessorAgentGroup:
         extraction_result: ExtractionAgentOutput | None = None
         fact_check_result: FactCheckAgentOutput | None = None
         retry_count = 0
-        self.last_fact_check_trace_id = None
+        self.extraction_last_fact_check_trace_id = None
 
         self.extraction_agent.reset_memory()
-        self.fact_check_agent.reset_memory()
+        self.fact_check_agent1.reset_memory()
 
         self.extraction_agent.append_user_message(
             self.extraction_agent.build_user_message(
                 md_content=md_content, images=images
             )
         )
-        self.fact_check_agent.append_user_message(
-            self.fact_check_agent.build_user_message(
+        self.fact_check_agent1.append_user_message(
+            self.fact_check_agent1.build_user_message(
                 md_content=md_content, images=images
             )
         )
 
         while retry_count < max_retries:
-            extraction_result = await self.extraction_agent.run(project_id=project_id)
+            extraction_result = await self.extraction_agent.run()
 
             extraction_message = {"extraction_result": extraction_result.model_dump()}
             self.extraction_agent.append_assistant_message(
                 extraction_message,
                 name=self.extraction_agent.runtime_name,
             )
-            self.fact_check_agent.append_assistant_message(
+            self.fact_check_agent1.append_assistant_message(
                 extraction_message,
                 name=self.extraction_agent.runtime_name,
             )
 
-            fact_check_result = await self.fact_check_agent.run(project_id=project_id)
-            if fact_check_result is None:
+            fact_check_result_raw: Any = await self.fact_check_agent1.run()
+            if fact_check_result_raw is None:
                 raise RuntimeError("Fact check result is empty after extraction loop")
+            fact_check_result = cast(FactCheckAgentOutput, fact_check_result_raw)
 
-            self.last_fact_check_trace_id = self.fact_check_agent.last_trace_id
+            self.extraction_last_fact_check_trace_id = (
+                self.fact_check_agent1.last_trace_id
+            )
             fact_check_message = {"fact_check_result": fact_check_result.model_dump()}
 
             self.extraction_agent.append_assistant_message(
                 fact_check_message,
-                name=self.fact_check_agent.runtime_name,
+                name=self.fact_check_agent1.runtime_name,
             )
-            self.fact_check_agent.append_assistant_message(
+            self.fact_check_agent1.append_assistant_message(
                 fact_check_message,
-                name=self.fact_check_agent.runtime_name,
+                name=self.fact_check_agent1.runtime_name,
             )
 
             if fact_check_result.is_passed:
                 logger.info(
-                    "event=data_processor.fact_check_passed project_id=%s attempts=%s",
-                    project_id,
+                    "event=data_processor.fact_check_passed attempts=%s",
                     retry_count + 1,
                 )
                 break
 
             logger.warning(
-                "event=data_processor.fact_check_failed project_id=%s attempt=%s max_retries=%s error_count=%s",
-                project_id,
+                "event=data_processor.fact_check_failed attempt=%s max_retries=%s error_count=%s",
                 retry_count + 1,
                 max_retries,
                 len(fact_check_result.errors),
             )
             for error in fact_check_result.errors:
                 logger.warning(
-                    "event=data_processor.fact_check_error_detail project_id=%s field=%s suggestion=%s",
-                    project_id,
+                    "event=data_processor.fact_check_error_detail field=%s suggestion=%s",
                     error.field_path,
                     error.suggestion,
                 )
@@ -229,8 +252,7 @@ class DataProcessorAgentGroup:
 
         if not fact_check_result.is_passed:
             logger.warning(
-                "event=data_processor.fact_check_waiting_human_review project_id=%s retries=%s",
-                project_id,
+                "event=data_processor.fact_check_waiting_human_review retries=%s",
                 retry_count,
             )
 
@@ -238,3 +260,139 @@ class DataProcessorAgentGroup:
             raise RuntimeError("Extraction result is empty after fact check passed")
 
         return extraction_result, fact_check_result, retry_count
+
+    async def run_analysis_fact_check_loop(
+        self,
+        *,
+        md_content: str,
+        images: list[str],
+        max_retries: int,
+    ) -> tuple[AnalysisAgentOutput, FactCheckAgentOutput, int]:
+        analysis_result: AnalysisAgentOutput | None = None
+        fact_check_result: FactCheckAgentOutput | None = None
+        retry_count = 0
+        self.analysis_last_fact_check_trace_id = None
+
+        self.analysis_agent.reset_memory()
+        self.fact_check_agent2.reset_memory()
+
+        self.analysis_agent.append_user_message(
+            self.analysis_agent.build_user_message(md_content=md_content, images=images)
+        )
+        self.fact_check_agent2.append_user_message(
+            self.fact_check_agent2.build_user_message(
+                md_content=md_content, images=images
+            )
+        )
+
+        while retry_count < max_retries:
+            analysis_result = await self.analysis_agent.run()
+
+            analysis_message = {"analysis_result": analysis_result.model_dump()}
+            self.analysis_agent.append_assistant_message(
+                analysis_message,
+                name=self.analysis_agent.runtime_name,
+            )
+            self.fact_check_agent2.append_assistant_message(
+                analysis_message,
+                name=self.analysis_agent.runtime_name,
+            )
+
+            fact_check_result_raw: Any = await self.fact_check_agent2.run()
+            if fact_check_result_raw is None:
+                raise RuntimeError("Fact check result is empty after analysis loop")
+            fact_check_result = cast(FactCheckAgentOutput, fact_check_result_raw)
+
+            self.analysis_last_fact_check_trace_id = (
+                self.fact_check_agent2.last_trace_id
+            )
+            fact_check_message = {"fact_check_result": fact_check_result.model_dump()}
+
+            self.analysis_agent.append_assistant_message(
+                fact_check_message,
+                name=self.fact_check_agent2.runtime_name,
+            )
+            self.fact_check_agent2.append_assistant_message(
+                fact_check_message,
+                name=self.fact_check_agent2.runtime_name,
+            )
+
+            if fact_check_result.is_passed:
+                logger.info(
+                    "event=data_processor.analysis_fact_check_passed attempts=%s",
+                    retry_count + 1,
+                )
+                break
+
+            logger.warning(
+                "event=data_processor.analysis_fact_check_failed attempt=%s max_retries=%s error_count=%s",
+                retry_count + 1,
+                max_retries,
+                len(fact_check_result.errors),
+            )
+            for error in fact_check_result.errors:
+                logger.warning(
+                    "event=data_processor.analysis_fact_check_error_detail field=%s suggestion=%s",
+                    error.field_path,
+                    error.suggestion,
+                )
+
+            retry_count += 1
+
+        if fact_check_result is None:
+            raise RuntimeError(
+                "Fact check result is empty after analysis fact check loop"
+            )
+
+        if not fact_check_result.is_passed:
+            logger.warning(
+                "event=data_processor.analysis_fact_check_waiting_human_review retries=%s",
+                retry_count,
+            )
+
+        if analysis_result is None:
+            raise RuntimeError("Analysis result is empty after fact check passed")
+
+        return analysis_result, fact_check_result, retry_count
+
+    async def run_parallel_loops(
+        self,
+        *,
+        md_content: str,
+        images: list[str],
+        max_retries: int,
+    ) -> tuple[
+        ExtractionAgentOutput,
+        FactCheckAgentOutput,
+        int,
+        AnalysisAgentOutput,
+        FactCheckAgentOutput,
+        int,
+    ]:
+        try:
+            extraction_task = self.run_extraction_fact_check_loop(
+                md_content=md_content,
+                images=images,
+                max_retries=max_retries,
+            )
+            analysis_task = self.run_analysis_fact_check_loop(
+                md_content=md_content,
+                images=images,
+                max_retries=max_retries,
+            )
+            extraction_result, analysis_result = await asyncio.gather(
+                extraction_task,
+                analysis_task,
+            )
+        except asyncio.CancelledError:
+            logger.info("event=data_processor.parallel_loops_canceled")
+            raise
+
+        return (
+            extraction_result[0],
+            extraction_result[1],
+            extraction_result[2],
+            analysis_result[0],
+            analysis_result[1],
+            analysis_result[2],
+        )

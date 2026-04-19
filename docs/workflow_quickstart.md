@@ -1,22 +1,24 @@
 # Paper Plane X Data Process 快速上手
 
-这份文档用于快速验证后端 Data Process 是否可用：
+这份文档用于快速验证后端 Data Process 链路是否可用：
 - 创建项目
-- 上传 1 个 PDF
-- 观察后台处理状态
-- 查看结果与落盘文件
+- 上传 1 个 PDF 并触发异步处理
+- 观察任务状态
+- 查看结构化结果与落盘文件
+- 将论文关联到项目并执行检索
 
 ## 1. 前置条件
 
-1. 已在项目根目录，且后端依赖安装完成。
-2. 已初始化环境变量（至少确保数据库和 MinerU 相关配置可用）。
-3. MinerU 服务可访问（默认 `MINERU_BASE_URL=http://localhost:7860`）。
+1. 已在仓库根目录。
+2. 后端依赖已安装。
+3. 数据库与 MinerU 相关配置可用。
+4. MinerU 服务可访问（默认 `MINERU_BASE_URL=http://localhost:7860`）。
 
-如果 MinerU 没有启动，上传会成功入队，但后台处理会失败并将状态写为 `FAILED`。
+说明：如果 MinerU 不可用，上传通常会成功入队，但任务最终会进入 `FAILED`。
 
 ## 2. 启动后端
 
-在一个终端执行：
+在终端执行：
 
 ```bash
 cd paper_plane_x_backend
@@ -30,7 +32,7 @@ uv run uvicorn paper_plane_x_backend.main:app --app-dir src --host 127.0.0.1 --p
 curl -s http://127.0.0.1:8000/health
 ```
 
-期望返回示例：
+期望返回：
 
 ```json
 {"status":"ok","app_name":"Paper Plane X"}
@@ -38,131 +40,112 @@ curl -s http://127.0.0.1:8000/health
 
 ## 3. 创建项目
 
-在另一个终端执行：
-
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/projects \
   -H "Content-Type: application/json" \
   -d '{"name":"Data Process Smoke Test","description":"upload one pdf"}'
 ```
 
-返回里会有 `project_id`，保存下来。示例：
+保存返回中的 `project_id`：
 
 ```bash
-export PROJECT_ID="替换成上一步返回的 project_id"
+export PROJECT_ID="替换成返回的 project_id"
 ```
 
 ## 4. 上传 PDF 启动 Data Process
-
-准备一个测试 PDF 路径：
 
 ```bash
 export PDF_PATH="/absolute/path/to/your/test.pdf"
 ```
 
-调用上传接口：
-
 ```bash
-curl -s -o /tmp/ppx_start_resp.json -w "%{http_code}\n" -X POST "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process" \
+curl -s -o /tmp/ppx_start_resp.json -w "%{http_code}\n" -X POST "http://127.0.0.1:8000/api/v1/papers" \
   -F "pdf_file=@${PDF_PATH};type=application/pdf" \
   -F "title=Smoke Test Paper" \
   -F "authors=Alice,Bob" \
   -F "year=2024" \
-  -F "venue=ArXiv"
+  -F "publication=ArXiv"
 
 cat /tmp/ppx_start_resp.json
 ```
 
 期望：
-- HTTP 状态码 `202`
-- 返回 `resource_id`（即 paper_id）
+- HTTP 状态码为 `202`
+- 返回 `resource_id`（即 `paper_id`）
 - 返回 `task_id`
-- `status` 为 `QUEUED`
+- 返回 `status=QUEUED`
 
-保存 `paper_id`：
-
-```bash
-export PAPER_ID="替换成上一步返回的 resource_id"
-export TASK_ID="替换成上一步返回的 task_id"
-```
-
-可用 jq 快速提取（可选）：
+提取环境变量（可选）：
 
 ```bash
 export PAPER_ID="$(jq -r '.resource_id' /tmp/ppx_start_resp.json)"
 export TASK_ID="$(jq -r '.task_id' /tmp/ppx_start_resp.json)"
 ```
 
-## 5. 查询处理状态
+## 5. 将论文关联到项目
 
-查看单篇详情：
+上传接口不会自动绑定到指定项目，需显式关联：
 
 ```bash
-curl -s "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/papers/${PAPER_ID}"
+curl -s -X POST "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/papers/${PAPER_ID}"
+```
+
+## 6. 查询处理状态
+
+查看论文详情：
+
+```bash
+curl -s "http://127.0.0.1:8000/api/v1/papers/${PAPER_ID}"
 ```
 
 建议重点关注字段：
 - `extraction_status`
-- `fact_check_status`
+- `extraction_fact_check_status`
+- `analysis_fact_check_status`
 - `raw_pdf_path`
-- `final_fact_check_trace_id`
+- `extraction_final_fact_check_trace_id`
+- `analysis_final_fact_check_trace_id`
 
-状态字段说明：
-- `extraction_status`: `PENDING` -> `PROCESSING` -> `COMPLETED` 或 `FAILED`
-- `fact_check_status`: `PENDING` -> `PASSED` 或 `FAILED`
-- 人工更新后可出现：
-  - `extraction_status=HUMAN_COMPLETED`
-  - `fact_check_status=HUMAN_PASSED`
+状态流（常见）：
+- `extraction_status`: `PENDING -> PROCESSING -> COMPLETED|FAILED`
+- `extraction_fact_check_status`: `PENDING -> PASSED|FAILED|HUMAN_PASSED`
+- `analysis_fact_check_status`: `PENDING -> PASSED|FAILED|HUMAN_PASSED`
 
-也可以循环轮询：
-
-```bash
-while true; do
-  curl -s "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/papers/${PAPER_ID}" \
-    | sed 's/,/\n/g' | grep -E 'extraction_status|fact_check_status|raw_pdf_path'
-  sleep 2
-done
-```
-
-查看任务队列状态：
+查询任务队列：
 
 ```bash
-curl -s "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process/tasks"
+curl -s "http://127.0.0.1:8000/api/v1/data-process/tasks"
 ```
 
-返回里可看到：
-- `queued/running/completed/failed/canceled` 统计
-- 每个任务的 `task_id`, `paper_id`, `status`, `error`, `created_at`
+返回包含：
+- 聚合统计：`queued/running/completed/failed/canceled`
+- 任务项：`task_id`、`paper_id`、`status`、`error`、`created_at`
 
 取消任务：
 
 ```bash
-curl -s -X POST \
-  "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process/tasks/${TASK_ID}/cancel"
+curl -s -X POST "http://127.0.0.1:8000/api/v1/data-process/tasks/${TASK_ID}/cancel"
 ```
 
-重试失败任务（无需重新上传文件，复用 raw_pdf_path）：
+重试失败或已取消任务：
 
 ```bash
-curl -s -X POST \
-  "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process/tasks/${TASK_ID}/retry"
+curl -s -X POST "http://127.0.0.1:8000/api/v1/data-process/tasks/${TASK_ID}/retry"
 ```
 
-同一 paper_id 重新上传并重试：
+同一论文重传并重跑：
 
 ```bash
-curl -s -X POST \
-  "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process/${PAPER_ID}/retry" \
+curl -s -X POST "http://127.0.0.1:8000/api/v1/papers/${PAPER_ID}/reprocess" \
   -F "pdf_file=@${PDF_PATH};type=application/pdf"
 ```
 
-说明：该接口当前仅接收 PDF 文件，不再接收 title/authors/year/venue/doi 元数据。
+说明：`reprocess` 接口当前仅接收 PDF 文件。
 
-人工手动更新元数据与处理结果：
+## 7. 人工更新结果
 
 ```bash
-curl -s -X PATCH \
-  "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/data-process/${PAPER_ID}/manual-update" \
+curl -s -X PATCH "http://127.0.0.1:8000/api/v1/papers/${PAPER_ID}" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Manual Updated Title",
@@ -170,52 +153,48 @@ curl -s -X PATCH \
     "extraction_status": "HUMAN_COMPLETED",
     "quick_scan": {"manual": true},
     "synthesis_data": {"sections": 3},
-    "fact_check_status": "HUMAN_PASSED",
-    "fact_check_result": {"reviewer": "human"}
+    "analysis_report": {"manual": true},
+    "extraction_fact_check_status": "HUMAN_PASSED",
+    "analysis_fact_check_status": "HUMAN_PASSED",
+    "extraction_fact_check_result": {"reviewer": "human"},
+    "analysis_fact_check_result": {"reviewer": "human"}
   }'
 ```
 
-手动状态可选值：
-- `extraction_status`: `HUMAN_COMPLETED` 或 `FAILED`
-- `fact_check_status`: `HUMAN_PASSED` 或 `FAILED`
+## 8. Librarian 验证（可选）
+
+项目内统一搜索：
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/api/v1/projects/${PROJECT_ID}/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "ignored-by-server",
+    "condition_group": {"operator": "and", "conditions": []},
+    "limit": 20,
+    "offset": 0
+  }'
 ```
 
-## 6. 成功时你应看到什么
+按路径取字段：
 
-当处理完成：
-- `extraction_status` 为 `COMPLETED`
-- `fact_check_status` 为 `PASSED`
-- `quick_scan` 与 `synthesis_data` 有值
-- `raw_pdf_path` 指向原始文件路径（位于 `data/papers/{paper_id}/original.<ext>`）
+```bash
+curl -s -X POST "http://127.0.0.1:8000/api/v1/librarian/projection" \
+  -H "Content-Type: application/json" \
+  -d '{"paper_id":"'"${PAPER_ID}"'","field_path":"quick_scan.quick_summary"}'
+```
 
-并且同目录下通常会有 MinerU 产生的 markdown 和图片。
+## 9. 成功验收标准
 
-## 7. 常见问题
+1. 可以创建项目。
+2. 可以上传 PDF，且返回 `paper_id` 与 `task_id`。
+3. 论文详情中存在 `raw_pdf_path`（通常位于 `data/papers/{paper_id}/original.<ext>`）。
+4. 任务可进入 `COMPLETED`，失败时能看到明确错误原因。
+5. 服务重启后，未完成任务可被自动恢复并继续执行。
 
-1. 一直 `PENDING` 或 `PROCESSING`
-- 检查后端进程日志是否有 worker 异常。
-- 确认 `DATA_PROCESS_WORKER_COUNT` 大于 0。
+## 10. 常见问题
 
-2. 变成 `FAILED`
-- 优先看后端日志栈信息。
-- 查看论文详情中的 `fact_check_result` 是否有错误信息。
-- 确认 MinerU 服务地址与可达性。
-
-3. 上传成功但没有文件
-- 检查 `MINERU_OUTPUT_DIR` 配置（默认 `./data/papers`）。
-- 确认运行目录是否是 `paper_plane_x_backend`。
-
-4. 无法终止/删除任务
-- 已完成（`COMPLETED`）或已失败（`FAILED`）任务不能再取消。
-- 运行中的任务取消后会短暂显示 `CANCELING`，随后变为 `CANCELED`。
-- `DELETE /api/v1/projects/{project_id}/papers/{paper_id}` 在 `PENDING/PROCESSING` 状态会返回 409。
-
-5. 服务重启后任务丢失
-- 当前任务状态持久化在 SQLite，应用启动会恢复 `QUEUED` 任务并重置 `RUNNING/CANCELING` 为 `QUEUED` 后继续执行。
-
-## 8. 最小验收清单
-
-- 能创建项目。
-- 能上传 PDF 并拿到 `paper_id`。
-- 详情接口能返回 `raw_pdf_path`。
-- 最终状态能进入 `COMPLETED/PASSED`（或有明确失败原因）。
+1. 一直 `PENDING` 或 `PROCESSING`：检查后端日志与 worker 是否启动，确认 `DATA_PROCESS_WORKER_COUNT > 0`。
+2. 任务 `FAILED`：先看后端日志栈，其次看论文详情中的 fact check 结果字段。
+3. 文件未落盘：检查 `MINERU_OUTPUT_DIR` 与运行目录是否正确（建议在 `paper_plane_x_backend` 下启动）。
+4. 任务无法取消：`COMPLETED/FAILED` 任务不允许取消，运行中任务会先短暂进入 `CANCELING`。

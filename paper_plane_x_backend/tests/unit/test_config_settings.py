@@ -5,7 +5,7 @@ from paper_plane_x_backend.config import AgentLLMConfigs, LLMConfig, Settings
 
 def test_get_agent_llm_config_merges_overrides() -> None:
     settings = Settings(
-        LLM=LLMConfig(
+        llm=LLMConfig(
             model="global-model",
             api_key="k-global",
             base_url="http://global",
@@ -15,7 +15,7 @@ def test_get_agent_llm_config_merges_overrides() -> None:
             custom_headers={"X-G": "1"},
             is_vlm=False,
         ),
-        AGENT_LLM=AgentLLMConfigs(
+        agent_llm=AgentLLMConfigs(
             extraction=LLMConfig(
                 model="extract-model",
                 temperature=0.1,
@@ -37,8 +37,8 @@ def test_get_agent_llm_config_merges_overrides() -> None:
 
 def test_get_agent_llm_config_returns_global_when_missing() -> None:
     settings = Settings(
-        LLM=LLMConfig(model="global-model", api_key="k", is_vlm=False),
-        AGENT_LLM=AgentLLMConfigs(),
+        llm=LLMConfig(model="global-model", api_key="k", is_vlm=False),
+        agent_llm=AgentLLMConfigs(),
     )
 
     cfg = settings.get_agent_llm_config("writer")

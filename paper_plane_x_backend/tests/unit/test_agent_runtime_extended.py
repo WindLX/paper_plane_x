@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from paper_plane_x_backend.config import LLMConfig
 from paper_plane_x_backend.core.agent_runtime import (
     AgentExecutionError,
+    AgentValidationError,
     BaseAgent,
     LLMClient,
     LLMResponse,
@@ -30,6 +31,11 @@ from paper_plane_x_backend.schemas.agent_io.base import (
 
 class ApiOutput(BaseModel):
     value: str
+
+
+class StrictTwoFieldsOutput(BaseModel):
+    value: str
+    detail: str
 
 
 class FakeDB:
@@ -59,10 +65,9 @@ class TestBaseAgentExtended:
     async def _run_with_input(
         agent: BaseAgent,
         user_input: dict[str, object],
-        project_id: str = "unknown",
     ) -> BaseModel | str:
         agent.memory.append_user_message(user_input)
-        return await agent.run(project_id=project_id)
+        return await agent.run()
 
     def test_api_mode_requires_schema(self) -> None:
         with pytest.raises(ValueError, match="output_schema is required"):
@@ -108,14 +113,12 @@ class TestBaseAgentExtended:
         result = await self._run_with_input(
             agent,
             {"query": "q"},
-            project_id="p-1",
         )
 
         assert result == "ok"
         assert len(fake_db.inserts) == 1
         table, payload = fake_db.inserts[0]
         assert table == "agent_traces"
-        assert payload["project_id"] == "p-1"
         assert payload["agent_name"] == agent.agent_name
         assert "latest_input_message" in payload
         assert payload["llm_model"] == "trace-model"
@@ -152,6 +155,60 @@ class TestBaseAgentExtended:
 
         with pytest.raises(AgentExecutionError, match="Step execution failed"):
             await self._run_with_input(agent, {"x": 1})
+
+    @pytest.mark.asyncio
+    async def test_api_mode_prefers_larger_json_candidate(self) -> None:
+        agent = BaseAgent(
+            output_schema=StrictTwoFieldsOutput,
+            mode="api",
+            save_trace=False,
+            max_steps=1,
+        )
+
+        async def mock_generate_structured(messages, output_schema, **kwargs):
+            return LLMResponse(
+                content=(
+                    'small={"value":"v"}\n' 'large={"value":"v","detail":"use-me"}'
+                ),
+                model="test-model",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "x"})
+        assert isinstance(result, StrictTwoFieldsOutput)
+        assert result.value == "v"
+        assert result.detail == "use-me"
+
+    @pytest.mark.asyncio
+    async def test_api_mode_rejects_array_root_json(self) -> None:
+        agent = BaseAgent(
+            output_schema=ApiOutput,
+            mode="api",
+            save_trace=False,
+            max_steps=2,
+        )
+
+        call_count = 0
+
+        async def mock_generate_structured(messages, output_schema, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return LLMResponse(
+                content='[{"value": "not-allowed"}]',
+                model="test-model",
+                usage={},
+            )
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        with pytest.raises(
+            AgentValidationError,
+            match="root type must be JSON object",
+        ):
+            await self._run_with_input(agent, {"q": "x"})
+        assert call_count == 2
 
 
 class TestMemoryManagerExtended:
@@ -300,6 +357,27 @@ class TestLLMClientExtended:
         assert "schema" in captured["response_format"]
         assert captured["temperature"] == 0.33
 
+    @pytest.mark.asyncio
+    async def test_chat_infers_openai_provider_for_base_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        async def fake_acompletion(**kwargs):
+            captured.update(kwargs)
+            return make_response(content="ok")
+
+        monkeypatch.setattr(
+            "paper_plane_x_backend.core.agent_runtime.llm_client.acompletion",
+            fake_acompletion,
+        )
+
+        client = LLMClient(model="deepseek-chat", base_url="https://example.com/v1")
+        await client.chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert captured["model"] == "deepseek-chat"
+        assert captured["custom_llm_provider"] == "openai"
+
     def test_parse_response_with_tool_calls(self) -> None:
         client = LLMClient(model="m")
         tc = SimpleNamespace(
@@ -359,6 +437,22 @@ class TestToolSchemaExtended:
         assert props["c"]["type"] == "array"
         assert props["c"]["items"]["type"] == "integer"
         assert props["d"]["type"] == "object"
+
+    def test_tool_schema_ignores_annotated_metadata(self) -> None:
+        @tool()
+        def annotated_tool(
+            query: Annotated[
+                str,
+                "搜索关键词",
+                {"examples": ["llm safety"]},
+            ],
+        ) -> None:
+            return None
+
+        query_schema = annotated_tool.parameters["properties"]["query"]
+        assert query_schema["type"] == "string"
+        assert "description" not in query_schema
+        assert "examples" not in query_schema
 
     @pytest.mark.asyncio
     async def test_execute_raises_when_function_unbound(self) -> None:

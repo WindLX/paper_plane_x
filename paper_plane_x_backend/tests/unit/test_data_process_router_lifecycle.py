@@ -2,7 +2,7 @@
 
 import pytest
 
-from paper_plane_x_backend.api.routers import data_process
+from paper_plane_x_backend.services.data_process_tasks import lifecycle
 
 
 class _FakeManager:
@@ -22,10 +22,14 @@ async def test_start_stop_worker_pool_delegate_to_task_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _FakeManager()
-    monkeypatch.setattr(data_process, "_task_manager", fake)
+    monkeypatch.setattr(
+        lifecycle,
+        "get_data_process_task_manager",
+        lambda: fake,
+    )
 
-    await data_process.start_worker_pool()
-    await data_process.stop_worker_pool()
+    await lifecycle.start_worker_pool()
+    await lifecycle.stop_worker_pool()
 
     assert fake.start_calls == 1
     assert fake.stop_calls == 1

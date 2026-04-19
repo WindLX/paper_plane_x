@@ -4,7 +4,7 @@ import logging
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 import httpx
@@ -137,7 +137,7 @@ class MinerUClient:
     def _parse_response(
         self, response: httpx.Response, output_md_name: str, save_dir: str | Path
     ) -> MinerUOutput:
-        data = response.json()
+        data = cast(dict[str, Any], response.json())
 
         results = data.get("results")
 
@@ -147,8 +147,10 @@ class MinerUClient:
                 "Invalid response format: 'results' field missing or invalid"
             )
 
+        results_dict = cast(dict[str, Any], results)
+
         try:
-            first_file_result = next(iter(results.values()))
+            first_file_result = next(iter(results_dict.values()))
         except StopIteration:
             logger.error("event=mineru.response_empty_results")
             raise ValueError("Invalid response format: 'results' is empty")
@@ -157,13 +159,15 @@ class MinerUClient:
             logger.error("event=mineru.response_invalid_first_result")
             raise ValueError("Invalid result format: expected a dictionary")
 
-        md_content = first_file_result.get("md_content")
+        first_result_dict = cast(dict[str, Any], first_file_result)
+
+        md_content = first_result_dict.get("md_content")
 
         if not md_content or not isinstance(md_content, str):
             logger.error("event=mineru.response_missing_md_content")
             raise ValueError(
                 "'md_content' not found or invalid in result. Keys: "
-                f"{list(first_file_result.keys())}"
+                f"{list(first_result_dict.keys())}"
             )
 
         save_dir = Path(save_dir)
@@ -174,7 +178,12 @@ class MinerUClient:
             md_file.write(md_content)
         logger.info("event=mineru.markdown_saved path=%s", save_dir / output_md_name)
 
-        images_info: dict[str, str] = first_file_result.get("images", {})
+        images_info_raw = first_result_dict.get("images", {})
+        images_info: dict[str, str] = {}
+        if isinstance(images_info_raw, dict):
+            for key, value in cast(dict[Any, Any], images_info_raw).items():
+                if isinstance(key, str) and isinstance(value, str):
+                    images_info[key] = value
         decoded_image_count = 0
         for img_name, img_data in images_info.items():
             if not img_data.startswith("data:image"):
@@ -260,7 +269,7 @@ class MinerUClient:
         md_pattern = r"!\[[^\]]*\]\(([^)]+)\)"
         html_pattern = r"<img[^>]+src=[\"']([^\"']+)[\"'][^>]*>"
 
-        for raw_ref in re.findall(md_pattern, md_content):
+        for raw_ref in cast(list[str], re.findall(md_pattern, md_content)):
             ref = raw_ref.strip()
             # markdown image 可能带标题: ![](path \"title\")
             if " " in ref:
@@ -270,7 +279,9 @@ class MinerUClient:
             if parsed_path.name:
                 references.add(parsed_path.name)
 
-        for raw_ref in re.findall(html_pattern, md_content, flags=re.IGNORECASE):
+        for raw_ref in cast(
+            list[str], re.findall(html_pattern, md_content, flags=re.IGNORECASE)
+        ):
             ref = raw_ref.strip("<>'\"")
             parsed_path = Path(unquote(urlparse(ref).path))
             if parsed_path.name:

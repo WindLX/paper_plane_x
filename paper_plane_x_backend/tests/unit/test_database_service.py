@@ -25,7 +25,8 @@ def test_init_tables_creates_new_columns_and_drops_legacy_table(tmp_path: Path) 
     db.init_tables()
 
     papers_columns = _table_columns(db, "papers")
-    assert "final_fact_check_trace_id" in papers_columns
+    assert "extraction_final_fact_check_trace_id" in papers_columns
+    assert "analysis_final_fact_check_trace_id" in papers_columns
     assert "raw_pdf_sha256" in papers_columns
 
     trace_columns = _table_columns(db, "agent_traces")
@@ -41,7 +42,7 @@ def test_init_tables_creates_new_columns_and_drops_legacy_table(tmp_path: Path) 
     task_columns = _table_columns(db, "data_process_tasks")
     for col in [
         "task_id",
-        "project_id",
+        "paper_id",
         "payload",
         "status",
         "created_at",
@@ -69,7 +70,8 @@ def test_init_tables_is_idempotent(tmp_path: Path) -> None:
 
     papers_columns = _table_columns(db, "papers")
     assert "paper_id" in papers_columns
-    assert "final_fact_check_trace_id" in papers_columns
+    assert "extraction_final_fact_check_trace_id" in papers_columns
+    assert "analysis_final_fact_check_trace_id" in papers_columns
     assert "raw_pdf_sha256" in papers_columns
 
     task_columns = _table_columns(db, "data_process_tasks")

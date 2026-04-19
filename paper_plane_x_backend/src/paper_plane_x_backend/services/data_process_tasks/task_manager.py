@@ -1,208 +1,28 @@
 """Data Process 任务队列管理器。"""
 
 import asyncio
-import json
 import logging
-from abc import ABC, abstractmethod
-from collections.abc import Iterator, MutableMapping
-from dataclasses import dataclass
+from collections.abc import MutableMapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from paper_plane_x_backend.config import settings
 from paper_plane_x_backend.models import DataProcessTaskStatus
-from paper_plane_x_backend.services import Database, PaperService, get_db
+from paper_plane_x_backend.services.data_process_tasks.models import (
+    DataProcessQueueTask,
+    DataProcessTaskState,
+)
+from paper_plane_x_backend.services.data_process_tasks.stores import (
+    DataProcessTaskStateStore,
+    SQLiteDataProcessTaskStateStore,
+    TaskStateStoreView,
+)
+from paper_plane_x_backend.services.database import get_db
+from paper_plane_x_backend.services.paper.parser import PaperParser
+from paper_plane_x_backend.services.paper.processor import PaperProcessor
+from paper_plane_x_backend.services.paper.repository import PaperRepository
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class DataProcessQueueTask:
-    task_id: str
-    project_id: str
-    payload: dict[str, Any]
-    cleanup_path: Path | None = None
-    retry_of_task_id: str | None = None
-
-
-@dataclass(slots=True)
-class DataProcessTaskState:
-    task_id: str
-    project_id: str
-    payload: dict[str, Any]
-    status: DataProcessTaskStatus
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    error: str | None = None
-    retry_of_task_id: str | None = None
-
-
-class DataProcessTaskStateStore(ABC):
-    """任务状态存储抽象接口。"""
-
-    @abstractmethod
-    def clear(self) -> None:
-        """清空状态存储。"""
-
-    @abstractmethod
-    def upsert(self, state: DataProcessTaskState) -> None:
-        """写入或更新任务状态。"""
-
-    @abstractmethod
-    def get(self, task_id: str) -> DataProcessTaskState | None:
-        """按 task_id 获取任务状态。"""
-
-    @abstractmethod
-    def list(self, project_id: str | None = None) -> list[DataProcessTaskState]:
-        """列出任务状态。"""
-
-
-class InMemoryDataProcessTaskStateStore(DataProcessTaskStateStore):
-    """内存版任务状态存储实现。"""
-
-    def __init__(self) -> None:
-        self._states: dict[str, DataProcessTaskState] = {}
-
-    @property
-    def states(self) -> dict[str, DataProcessTaskState]:
-        return self._states
-
-    def clear(self) -> None:
-        self._states.clear()
-
-    def upsert(self, state: DataProcessTaskState) -> None:
-        self._states[state.task_id] = state
-
-    def get(self, task_id: str) -> DataProcessTaskState | None:
-        return self._states.get(task_id)
-
-    def list(self, project_id: str | None = None) -> list[DataProcessTaskState]:
-        values = list(self._states.values())
-        if project_id is not None:
-            values = [state for state in values if state.project_id == project_id]
-        values.sort(key=lambda state: state.created_at, reverse=True)
-        return values
-
-
-class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
-    """SQLite 版任务状态存储实现。"""
-
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    def clear(self) -> None:
-        self._db.execute("DELETE FROM data_process_tasks")
-
-    def upsert(self, state: DataProcessTaskState) -> None:
-        payload_json = json.dumps(state.payload, ensure_ascii=False)
-        self._db.execute(
-            """
-            INSERT INTO data_process_tasks (
-                task_id, project_id, payload, status,
-                created_at, started_at, finished_at, error, retry_of_task_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(task_id) DO UPDATE SET
-                project_id=excluded.project_id,
-                payload=excluded.payload,
-                status=excluded.status,
-                created_at=excluded.created_at,
-                started_at=excluded.started_at,
-                finished_at=excluded.finished_at,
-                error=excluded.error,
-                retry_of_task_id=excluded.retry_of_task_id
-            """,
-            (
-                state.task_id,
-                state.project_id,
-                payload_json,
-                state.status.value,
-                state.created_at,
-                state.started_at,
-                state.finished_at,
-                state.error,
-                state.retry_of_task_id,
-            ),
-        )
-
-    def get(self, task_id: str) -> DataProcessTaskState | None:
-        row = self._db.fetchone(
-            "SELECT * FROM data_process_tasks WHERE task_id = ?",
-            (task_id,),
-        )
-        if row is None:
-            return None
-        return self._row_to_state(row)
-
-    def list(self, project_id: str | None = None) -> list[DataProcessTaskState]:
-        if project_id is None:
-            rows = self._db.fetchall(
-                "SELECT * FROM data_process_tasks ORDER BY created_at DESC"
-            )
-        else:
-            rows = self._db.fetchall(
-                """
-                SELECT * FROM data_process_tasks
-                WHERE project_id = ?
-                ORDER BY created_at DESC
-                """,
-                (project_id,),
-            )
-        return [self._row_to_state(row) for row in rows]
-
-    @staticmethod
-    def _row_to_state(row: dict[str, Any]) -> DataProcessTaskState:
-        payload_raw = row.get("payload")
-        payload: dict[str, Any]
-        if isinstance(payload_raw, str):
-            parsed_payload = json.loads(payload_raw)
-            payload = parsed_payload if isinstance(parsed_payload, dict) else {}
-        elif isinstance(payload_raw, dict):
-            payload = payload_raw
-        else:
-            payload = {}
-
-        return DataProcessTaskState(
-            task_id=row["task_id"],
-            project_id=row["project_id"],
-            payload=payload,
-            status=DataProcessTaskStatus(row["status"]),
-            created_at=row["created_at"],
-            started_at=row.get("started_at"),
-            finished_at=row.get("finished_at"),
-            error=row.get("error"),
-            retry_of_task_id=row.get("retry_of_task_id"),
-        )
-
-
-class TaskStateStoreView(MutableMapping[str, DataProcessTaskState]):
-    """面向测试的状态访问视图，兼容 task_states 字典访问。"""
-
-    def __init__(self, store: DataProcessTaskStateStore) -> None:
-        self._store = store
-
-    def __getitem__(self, key: str) -> DataProcessTaskState:
-        value = self._store.get(key)
-        if value is None:
-            raise KeyError(key)
-        return value
-
-    def __setitem__(self, key: str, value: DataProcessTaskState) -> None:
-        if key != value.task_id:
-            raise KeyError("task_id key mismatch")
-        self._store.upsert(value)
-
-    def __delitem__(self, key: str) -> None:
-        raise NotImplementedError("delete is not supported")
-
-    def __iter__(self) -> Iterator[str]:
-        for state in self._store.list():
-            yield state.task_id
-
-    def __len__(self) -> int:
-        return len(self._store.list())
 
 
 class DataProcessTaskManager:
@@ -213,6 +33,7 @@ class DataProcessTaskManager:
         worker_count: int = 1,
         state_store: DataProcessTaskStateStore | None = None,
         shutdown_timeout: float = 5.0,
+        task_max_seconds: float = 600.0,
     ) -> None:
         self.worker_count = max(1, worker_count)
         self._queue: asyncio.Queue[DataProcessQueueTask | None] | None = None
@@ -226,7 +47,35 @@ class DataProcessTaskManager:
         self._running_jobs: dict[str, asyncio.Task[object]] = {}
         self._cancel_requests: set[str] = set()
         self._shutdown_timeout = max(0.1, shutdown_timeout)
+        self._task_max_seconds = max(0.1, task_max_seconds)
         self._task_states_view = TaskStateStoreView(self._state_store)
+
+    async def _wait_tasks_with_timeout(
+        self,
+        tasks: list[asyncio.Task[object]] | list[asyncio.Task[None]],
+        *,
+        timeout: float,
+        event_name: str,
+    ) -> bool:
+        """等待一组任务在超时内结束。"""
+        pending_tasks = [task for task in tasks if not task.done()]
+        if not pending_tasks:
+            return True
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending_tasks, return_exceptions=True),
+                timeout=timeout,
+            )
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(
+                "event=%s timeout_seconds=%.1f pending_count=%s",
+                event_name,
+                timeout,
+                len([task for task in pending_tasks if not task.done()]),
+            )
+            return False
 
     @property
     def task_states(self) -> MutableMapping[str, DataProcessTaskState]:
@@ -273,7 +122,7 @@ class DataProcessTaskManager:
                 await self._queue.put(
                     DataProcessQueueTask(
                         task_id=state.task_id,
-                        project_id=state.project_id,
+                        paper_id=state.paper_id,
                         payload=state.payload,
                         retry_of_task_id=state.retry_of_task_id,
                     )
@@ -299,8 +148,11 @@ class DataProcessTaskManager:
             if not job.done():
                 job.cancel()
 
-        if running_jobs:
-            await asyncio.gather(*running_jobs, return_exceptions=True)
+        await self._wait_tasks_with_timeout(
+            running_jobs,
+            timeout=self._shutdown_timeout,
+            event_name="task_manager.running_jobs_cancel_timeout",
+        )
 
         queue = self._queue
         workers = list(self._workers)
@@ -308,12 +160,12 @@ class DataProcessTaskManager:
         for _ in workers:
             await queue.put(None)
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*workers, return_exceptions=True),
-                timeout=self._shutdown_timeout,
-            )
-        except asyncio.TimeoutError:
+        workers_stopped = await self._wait_tasks_with_timeout(
+            workers,
+            timeout=self._shutdown_timeout,
+            event_name="task_manager.workers_stop_timeout",
+        )
+        if not workers_stopped:
             logger.warning(
                 "event=task_manager.workers_force_stop timeout_seconds=%.1f",
                 self._shutdown_timeout,
@@ -321,7 +173,11 @@ class DataProcessTaskManager:
             for worker in workers:
                 if not worker.done():
                     worker.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
+            await self._wait_tasks_with_timeout(
+                workers,
+                timeout=self._shutdown_timeout,
+                event_name="task_manager.workers_force_stop_timeout",
+            )
 
         self._workers = []
         self._queue = None
@@ -331,13 +187,23 @@ class DataProcessTaskManager:
 
     async def submit_task(self, task: DataProcessQueueTask) -> DataProcessTaskState:
         if self._queue is None:
+            logger.error(
+                "event=task_manager.submit_rejected_not_started task_id=%s paper_id=%s",
+                task.task_id,
+                task.paper_id,
+            )
             raise RuntimeError("DataProcessTaskManager is not started")
         if self._state_store.get(task.task_id) is not None:
+            logger.warning(
+                "event=task_manager.submit_rejected_duplicate task_id=%s paper_id=%s",
+                task.task_id,
+                task.paper_id,
+            )
             raise ValueError(f"Task {task.task_id} already exists")
 
         state = DataProcessTaskState(
             task_id=task.task_id,
-            project_id=task.project_id,
+            paper_id=task.paper_id,
             payload=task.payload,
             status=DataProcessTaskStatus.QUEUED,
             created_at=datetime.now(),
@@ -346,17 +212,14 @@ class DataProcessTaskManager:
         self._state_store.upsert(state)
         await self._queue.put(task)
         logger.info(
-            "event=task_manager.task_submitted task_id=%s project_id=%s paper_id=%s",
+            "event=task_manager.task_submitted task_id=%s paper_id=%s",
             task.task_id,
-            task.project_id,
-            task.payload.get("paper_id"),
+            task.paper_id,
         )
         return state
 
-    def list_tasks(
-        self, *, project_id: str | None = None
-    ) -> list[DataProcessTaskState]:
-        return self._state_store.list(project_id=project_id)
+    def list_tasks(self, *, paper_id: str | None = None) -> list[DataProcessTaskState]:
+        return self._state_store.list(paper_id=paper_id)
 
     def get_task(self, task_id: str) -> DataProcessTaskState | None:
         return self._state_store.get(task_id)
@@ -364,6 +227,7 @@ class DataProcessTaskManager:
     def cancel_task(self, task_id: str) -> DataProcessTaskState:
         state = self._state_store.get(task_id)
         if state is None:
+            logger.warning("event=task_manager.cancel_not_found task_id=%s", task_id)
             raise KeyError(task_id)
 
         if state.status in {
@@ -371,6 +235,11 @@ class DataProcessTaskManager:
             DataProcessTaskStatus.FAILED,
             DataProcessTaskStatus.CANCELED,
         }:
+            logger.warning(
+                "event=task_manager.cancel_rejected_finished task_id=%s status=%s",
+                task_id,
+                state.status,
+            )
             raise ValueError(f"Task {task_id} already finished")
 
         self._cancel_requests.add(task_id)
@@ -420,22 +289,34 @@ class DataProcessTaskManager:
             state.started_at = datetime.now()
             self._state_store.upsert(state)
             logger.info(
-                "event=task_manager.task_started worker_id=%s task_id=%s project_id=%s",
+                "event=task_manager.task_started worker_id=%s task_id=%s paper_id=%s",
                 worker_id,
                 task.task_id,
-                task.project_id,
+                task.paper_id,
             )
 
             try:
                 job = asyncio.create_task(self._run_data_process_task(task))
                 self._running_jobs[task.task_id] = job
-                await job
+                await asyncio.wait_for(job, timeout=self._task_max_seconds)
                 state.status = DataProcessTaskStatus.COMPLETED
                 state.finished_at = datetime.now()
                 logger.info(
                     "event=task_manager.task_completed worker_id=%s task_id=%s",
                     worker_id,
                     task.task_id,
+                )
+            except asyncio.TimeoutError:
+                state.status = DataProcessTaskStatus.FAILED
+                state.error = (
+                    f"Task exceeded max execution time ({self._task_max_seconds:.1f}s)"
+                )
+                state.finished_at = datetime.now()
+                logger.warning(
+                    "event=task_manager.task_timeout worker_id=%s task_id=%s timeout_seconds=%.1f",
+                    worker_id,
+                    task.task_id,
+                    self._task_max_seconds,
                 )
             except asyncio.CancelledError:
                 state.status = DataProcessTaskStatus.CANCELED
@@ -451,9 +332,11 @@ class DataProcessTaskManager:
                 state.error = str(exc)
                 state.finished_at = datetime.now()
                 logger.exception(
-                    "event=task_manager.task_failed worker_id=%s task_id=%s",
+                    "event=task_manager.task_failed worker_id=%s task_id=%s paper_id=%s error=%s",
                     worker_id,
                     task.task_id,
+                    task.paper_id,
+                    exc,
                 )
             finally:
                 self._state_store.upsert(state)
@@ -472,11 +355,9 @@ class DataProcessTaskManager:
 
     async def _run_data_process_task(self, task: DataProcessQueueTask) -> None:
         """执行单个 data-process 任务。"""
-        paper_id = task.payload.get("paper_id")
+        paper_id = task.paper_id
         pdf_path = task.payload.get("pdf_path")
 
-        if not isinstance(paper_id, str) or not paper_id:
-            raise ValueError("Invalid paper_id in task payload")
         if not isinstance(pdf_path, str) or not pdf_path:
             raise ValueError("Invalid pdf_path in task payload")
 
@@ -486,9 +367,10 @@ class DataProcessTaskManager:
             paper_id,
             pdf_path,
         )
-        service = PaperService(get_db())
-        await service.process_existing_paper(
+        repo = PaperRepository(get_db())
+        processor = PaperProcessor(repo=repo, parser=PaperParser())
+        await processor.process(
             paper_id=paper_id,
             pdf_path=Path(pdf_path),
-            max_retries=settings.DATA_PROCESS_MAX_RETRIES,
+            max_retries=settings.data_process_max_retries,
         )

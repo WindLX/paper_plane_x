@@ -8,6 +8,21 @@ from fastapi.testclient import TestClient
 from paper_plane_x_backend.services import Database
 
 
+def _insert_linked_paper(
+    db: Database, project_id: str, payload: dict[str, object]
+) -> None:
+    data = dict(payload)
+    paper_id = data["paper_id"]
+    db.insert("papers", data)
+    db.execute(
+        """
+        INSERT INTO paper_projects (paper_id, project_id)
+        VALUES (?, ?)
+        """,
+        (paper_id, project_id),
+    )
+
+
 class TestProjectAPI:
     """Project API 测试类."""
 
@@ -162,17 +177,17 @@ class TestProjectAPI:
         project_id = create_response.json()["project_id"]
 
         now = datetime.now()
-        db.insert(
-            "papers",
+        _insert_linked_paper(
+            db,
+            project_id,
             {
                 "paper_id": "paper-to-delete",
-                "project_id": project_id,
                 "title": "A Paper",
                 "authors": json.dumps(["Alice"], ensure_ascii=False),
                 "md_content": "",
                 "images_paths": json.dumps([], ensure_ascii=False),
                 "extraction_status": "FAILED",
-                "fact_check_status": "FAILED",
+                "extraction_fact_check_status": "FAILED",
                 "extraction_retry_count": 1,
                 "created_at": now,
                 "updated_at": now,
@@ -183,12 +198,12 @@ class TestProjectAPI:
             f"/api/v1/projects/{project_id}/papers/paper-to-delete"
         )
         assert response.status_code == 200
-        assert "deleted" in response.json()["message"]
+        assert "unlinked" in response.json()["message"]
 
         detail_response = client.get(
             f"/api/v1/projects/{project_id}/papers/paper-to-delete"
         )
-        assert detail_response.status_code == 404
+        assert detail_response.status_code == 405
 
     def test_delete_paper_not_found(self, client: TestClient) -> None:
         """测试删除不存在的论文."""
@@ -212,17 +227,17 @@ class TestProjectAPI:
         project_id = create_response.json()["project_id"]
 
         now = datetime.now()
-        db.insert(
-            "papers",
+        _insert_linked_paper(
+            db,
+            project_id,
             {
                 "paper_id": "paper-processing",
-                "project_id": project_id,
                 "title": "Processing Paper",
                 "authors": json.dumps(["Bob"], ensure_ascii=False),
                 "md_content": "",
                 "images_paths": json.dumps([], ensure_ascii=False),
                 "extraction_status": "PROCESSING",
-                "fact_check_status": "PENDING",
+                "extraction_fact_check_status": "PENDING",
                 "extraction_retry_count": 0,
                 "created_at": now,
                 "updated_at": now,
@@ -232,4 +247,83 @@ class TestProjectAPI:
         response = client.delete(
             f"/api/v1/projects/{project_id}/papers/paper-processing"
         )
-        assert response.status_code == 409
+        assert response.status_code == 200
+
+    def test_project_search_delegates_to_librarian_with_project_scope(
+        self, client: TestClient, db: Database
+    ) -> None:
+        """测试 project search 会强制使用路径中的 project_id 进行作用域搜索。"""
+        p1_resp = client.post(
+            "/api/v1/projects",
+            json={"name": "Project Search P1"},
+        )
+        p2_resp = client.post(
+            "/api/v1/projects",
+            json={"name": "Project Search P2"},
+        )
+        p1 = p1_resp.json()["project_id"]
+        p2 = p2_resp.json()["project_id"]
+
+        now = datetime.now()
+        _insert_linked_paper(
+            db,
+            p1,
+            {
+                "paper_id": "paper-search-in-p1",
+                "title": "P1 Paper",
+                "authors": json.dumps(["Alice"], ensure_ascii=False),
+                "year": 2024,
+                "md_content": "Lyapunov stability design",
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "quick_scan": json.dumps({"verdict": "推荐精读"}, ensure_ascii=False),
+                "extraction_status": "COMPLETED",
+                "extraction_fact_check_status": "PASSED",
+                "analysis_fact_check_status": "PASSED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        _insert_linked_paper(
+            db,
+            p2,
+            {
+                "paper_id": "paper-search-in-p2",
+                "title": "P2 Paper",
+                "authors": json.dumps(["Bob"], ensure_ascii=False),
+                "year": 2024,
+                "md_content": "Lyapunov stability design",
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "quick_scan": json.dumps({"verdict": "推荐精读"}, ensure_ascii=False),
+                "extraction_status": "COMPLETED",
+                "extraction_fact_check_status": "PASSED",
+                "analysis_fact_check_status": "PASSED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        response = client.post(
+            f"/api/v1/projects/{p1}/search",
+            json={
+                "project_id": p2,
+                "condition_group": {
+                    "logic": "and",
+                    "predicates": [
+                        {
+                            "field": "md_content",
+                            "op": "contains",
+                            "value": "lyapunov",
+                        }
+                    ],
+                    "groups": [],
+                },
+                "limit": 10,
+                "offset": 0,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["project_id"] == p1
+        assert payload["total"] == 1
+        assert payload["paper_ids"] == ["paper-search-in-p1"]

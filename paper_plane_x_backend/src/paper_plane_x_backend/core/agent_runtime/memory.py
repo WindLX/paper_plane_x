@@ -7,7 +7,7 @@
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from paper_plane_x_backend.schemas.agent_io.base import (
     AssistantMessage,
@@ -71,8 +71,10 @@ class MemoryManager:
 
     def _build_user_content(self, inputs: dict[str, Any]) -> str | list[dict[str, Any]]:
         content = inputs.get("content")
-        if isinstance(content, str) or isinstance(content, list):
+        if isinstance(content, str):
             return content
+        if isinstance(content, list):
+            return [part for part in cast(list[Any], content) if isinstance(part, dict)]
 
         images = inputs.get("images")
         if self.is_vlm and isinstance(images, list) and images:
@@ -87,7 +89,7 @@ class MemoryManager:
                     }
                 )
 
-            for image in images:
+            for image in cast(list[Any], images):
                 if isinstance(image, str) and image:
                     parts.append(
                         {

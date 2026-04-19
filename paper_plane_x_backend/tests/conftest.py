@@ -8,15 +8,27 @@ from typing import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-from paper_plane_x_backend.api.dependencies import get_database
+from paper_plane_x_backend.api.dependencies import (
+    get_database,
+    get_task_manager,
+)
 from paper_plane_x_backend.config import settings
 from paper_plane_x_backend.services import Database, init_database
+from paper_plane_x_backend.services.data_process_tasks import (
+    lifecycle as task_manager_module,
+)
+from paper_plane_x_backend.services.data_process_tasks.stores import (
+    InMemoryDataProcessTaskStateStore,
+)
+from paper_plane_x_backend.services.data_process_tasks.task_manager import (
+    DataProcessTaskManager,
+)
 
 # 在导入 app 之前切换测试运行目录，避免生命周期初始化写入 ./data。
 _TEST_RUNTIME_DIR = Path(tempfile.mkdtemp(prefix="ppx-tests-"))
-settings.DATA_DIR = _TEST_RUNTIME_DIR
-settings.MINERU_OUTPUT_DIR = _TEST_RUNTIME_DIR / "papers"
-settings.LOG_FILE_PATH = _TEST_RUNTIME_DIR / "logs" / "backend.log"
+settings.data_dir = _TEST_RUNTIME_DIR
+settings.mineru_output_dir = _TEST_RUNTIME_DIR / "papers"
+settings.log_file_path = _TEST_RUNTIME_DIR / "logs" / "backend.log"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -52,10 +64,23 @@ def client(db: Database) -> Generator[TestClient, None, None]:
     def override_get_db() -> Database:
         return db
 
+    test_task_manager = DataProcessTaskManager(
+        worker_count=1,
+        state_store=InMemoryDataProcessTaskStateStore(),
+    )
+
+    def override_get_task_manager() -> DataProcessTaskManager:
+        return test_task_manager
+
     app.dependency_overrides[get_database] = override_get_db
+    app.dependency_overrides[get_task_manager] = override_get_task_manager
+
+    original_task_manager = task_manager_module._task_manager_instance
+    task_manager_module._task_manager_instance = test_task_manager
 
     with TestClient(app) as test_client:
         yield test_client
 
+    task_manager_module._task_manager_instance = original_task_manager
     # 清理依赖覆盖
     app.dependency_overrides.clear()

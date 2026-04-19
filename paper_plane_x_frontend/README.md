@@ -40,5 +40,6 @@ pnpm preview
 主要接口分组：
 
 - /api/v1/projects
-- /api/v1/projects/{project_id}/data-process
-- /api/v1/projects/{project_id}/data-process/tasks
+- /api/v1/papers
+- /api/v1/projects/{project_id}/papers
+- /api/v1/data-process/tasks

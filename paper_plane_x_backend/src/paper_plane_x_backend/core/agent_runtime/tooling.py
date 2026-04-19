@@ -7,7 +7,14 @@ import inspect
 import json
 import logging
 from types import UnionType
-from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Callable,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,10 +97,8 @@ class ToolRegistry:
 
         if isinstance(raw_arguments, str):
             arguments = json.loads(raw_arguments)
-        elif isinstance(raw_arguments, dict):
-            arguments = raw_arguments
         else:
-            arguments = {}
+            arguments = raw_arguments
         logger.debug(
             "event=tool.call_started tool_id=%s tool_name=%s argument_keys=%s",
             tool_id,
@@ -172,17 +177,22 @@ def _get_type_schema(type_hint: Any) -> dict[str, Any]:
     if origin is dict:
         return {"type": "object"}
 
-    type_map = {
-        str: {"type": "string"},
-        int: {"type": "integer"},
-        float: {"type": "number"},
-        bool: {"type": "boolean"},
-        list: {"type": "array"},
-        dict: {"type": "object"},
-        Any: {},
-    }
+    if type_hint is str:
+        return {"type": "string"}
+    if type_hint is int:
+        return {"type": "integer"}
+    if type_hint is float:
+        return {"type": "number"}
+    if type_hint is bool:
+        return {"type": "boolean"}
+    if type_hint is list:
+        return {"type": "array"}
+    if type_hint is dict:
+        return {"type": "object"}
+    if type_hint is Any:
+        return {}
 
-    return type_map.get(type_hint, {"type": "string"})
+    return {"type": "string"}
 
 
 def tool(

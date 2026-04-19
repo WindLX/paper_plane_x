@@ -39,12 +39,12 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE TABLE IF NOT EXISTS papers (
     paper_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     title TEXT,
     authors TEXT,
     year INTEGER,
-    venue TEXT,
+    publication TEXT,
     doi TEXT,
+    custom_meta TEXT,
     md_content TEXT,
     raw_pdf_path TEXT,
     raw_pdf_sha256 TEXT,
@@ -52,18 +52,30 @@ CREATE TABLE IF NOT EXISTS papers (
     extraction_status TEXT DEFAULT 'PENDING',
     quick_scan TEXT,
     synthesis_data TEXT,
-    fact_check_status TEXT DEFAULT 'PENDING',
-    fact_check_result TEXT,
-    final_fact_check_trace_id TEXT,
+    analysis_report TEXT,
+    extraction_fact_check_status TEXT DEFAULT 'PENDING',
+    extraction_fact_check_result TEXT,
+    extraction_final_fact_check_trace_id TEXT,
+    analysis_fact_check_status TEXT DEFAULT 'PENDING',
+    analysis_fact_check_result TEXT,
+    analysis_final_fact_check_trace_id TEXT,
     extraction_retry_count INTEGER DEFAULT 0,
+    analysis_retry_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS paper_projects (
+    paper_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (paper_id, project_id),
+    FOREIGN KEY (paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
     FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS agent_traces (
     trace_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
     latest_input_message TEXT,
     output_message TEXT,
@@ -73,21 +85,19 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     completion_tokens INTEGER,
     total_tokens INTEGER,
     usage_payload TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS data_process_tasks (
     task_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
     payload TEXT NOT NULL,
     status TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL,
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
     error TEXT,
-    retry_of_task_id TEXT,
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+    retry_of_task_id TEXT
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
@@ -145,10 +155,56 @@ class Database:
         with self.get_connection() as conn:
             self._configure_connection_pragmas(conn)
             conn.executescript(CREATE_TABLES_SQL)
+            if self._needs_schema_migration(conn):
+                self._backup_database_before_migration(conn)
             self._ensure_schema_migrations(conn)
             self._ensure_papers_fts_healthy(conn)
             conn.commit()
         logger.info("event=database.tables_initialized")
+
+    def _needs_schema_migration(self, conn: sqlite3.Connection) -> bool:
+        venue_exists = self._has_column(conn, "papers", "venue")
+        publication_exists = self._has_column(conn, "papers", "publication")
+        custom_meta_exists = self._has_column(conn, "papers", "custom_meta")
+        legacy_fact_check_exists = any(
+            self._has_column(conn, "papers", legacy_column)
+            for legacy_column in [
+                "fact_check_status",
+                "fact_check_result",
+                "final_fact_check_trace_id",
+            ]
+        )
+        new_columns_ready = all(
+            self._has_column(conn, "papers", column)
+            for column in [
+                "analysis_report",
+                "extraction_fact_check_status",
+                "extraction_fact_check_result",
+                "extraction_final_fact_check_trace_id",
+                "analysis_fact_check_status",
+                "analysis_fact_check_result",
+                "analysis_final_fact_check_trace_id",
+                "analysis_retry_count",
+            ]
+        )
+        return (
+            venue_exists
+            or (not publication_exists)
+            or (not custom_meta_exists)
+            or legacy_fact_check_exists
+            or (not new_columns_ready)
+        )
+
+    def _backup_database_before_migration(self, conn: sqlite3.Connection) -> None:
+        backup_dir = self.db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = backup_dir / f"{self.db_path.stem}_pre_migration_{timestamp}.db"
+
+        with sqlite3.connect(backup_path) as backup_conn:
+            conn.backup(backup_conn)
+
+        logger.info("event=database.backup_created path=%s", backup_path)
 
     @staticmethod
     def _configure_connection_pragmas(conn: sqlite3.Connection) -> None:
@@ -197,7 +253,57 @@ class Database:
         logger.info("event=database.fts_rebuilt")
 
     def _ensure_schema_migrations(self, conn: sqlite3.Connection) -> None:
-        self._ensure_column(conn, "papers", "final_fact_check_trace_id", "TEXT")
+        venue_exists = self._has_column(conn, "papers", "venue")
+        publication_exists = self._has_column(conn, "papers", "publication")
+        if not publication_exists:
+            self._ensure_column(conn, "papers", "publication", "TEXT")
+
+        if venue_exists:
+            conn.execute(
+                """
+                UPDATE papers
+                SET publication = venue
+                WHERE publication IS NULL AND venue IS NOT NULL
+                """
+            )
+            try:
+                conn.execute("ALTER TABLE papers DROP COLUMN venue")
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "event=database.drop_legacy_column_skipped table=papers column=venue error=%s",
+                    exc,
+                )
+
+        self._ensure_column(conn, "papers", "custom_meta", "TEXT")
+        self._ensure_column(conn, "papers", "analysis_report", "TEXT")
+        self._ensure_column(
+            conn,
+            "papers",
+            "extraction_fact_check_status",
+            "TEXT DEFAULT 'PENDING'",
+        )
+        self._ensure_column(conn, "papers", "extraction_fact_check_result", "TEXT")
+        self._ensure_column(
+            conn,
+            "papers",
+            "extraction_final_fact_check_trace_id",
+            "TEXT",
+        )
+        self._ensure_column(
+            conn,
+            "papers",
+            "analysis_fact_check_status",
+            "TEXT DEFAULT 'PENDING'",
+        )
+        self._ensure_column(conn, "papers", "analysis_fact_check_result", "TEXT")
+        self._ensure_column(
+            conn,
+            "papers",
+            "analysis_final_fact_check_trace_id",
+            "TEXT",
+        )
+        self._ensure_column(conn, "papers", "analysis_retry_count", "INTEGER DEFAULT 0")
+        self._migrate_legacy_fact_check_columns(conn)
         self._ensure_column(conn, "papers", "raw_pdf_sha256", "TEXT")
         self._ensure_column(conn, "agent_traces", "llm_model", "TEXT")
         self._ensure_column(conn, "agent_traces", "prompt_tokens", "INTEGER")
@@ -205,6 +311,62 @@ class Database:
         self._ensure_column(conn, "agent_traces", "total_tokens", "INTEGER")
         self._ensure_column(conn, "agent_traces", "usage_payload", "TEXT")
         conn.execute("DROP TABLE IF EXISTS data_process_history")
+
+    def _migrate_legacy_fact_check_columns(self, conn: sqlite3.Connection) -> None:
+        legacy_columns = [
+            "fact_check_status",
+            "fact_check_result",
+            "final_fact_check_trace_id",
+        ]
+        if not any(
+            self._has_column(conn, "papers", column) for column in legacy_columns
+        ):
+            return
+
+        if self._has_column(conn, "papers", "fact_check_status"):
+            conn.execute(
+                """
+                UPDATE papers
+                SET extraction_fact_check_status = fact_check_status
+                WHERE (extraction_fact_check_status IS NULL OR extraction_fact_check_status = '')
+                  AND fact_check_status IS NOT NULL
+                """
+            )
+        if self._has_column(conn, "papers", "fact_check_result"):
+            conn.execute(
+                """
+                UPDATE papers
+                SET extraction_fact_check_result = fact_check_result
+                WHERE extraction_fact_check_result IS NULL
+                  AND fact_check_result IS NOT NULL
+                """
+            )
+        if self._has_column(conn, "papers", "final_fact_check_trace_id"):
+            conn.execute(
+                """
+                UPDATE papers
+                SET extraction_final_fact_check_trace_id = final_fact_check_trace_id
+                WHERE extraction_final_fact_check_trace_id IS NULL
+                  AND final_fact_check_trace_id IS NOT NULL
+                """
+            )
+
+        for legacy_column in legacy_columns:
+            if not self._has_column(conn, "papers", legacy_column):
+                continue
+            try:
+                conn.execute(f"ALTER TABLE papers DROP COLUMN {legacy_column}")
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "event=database.drop_legacy_column_skipped table=papers column=%s error=%s",
+                    legacy_column,
+                    exc,
+                )
+
+    @staticmethod
+    def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row[1] == column for row in cols)
 
     @staticmethod
     def _ensure_column(
