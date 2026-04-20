@@ -385,6 +385,189 @@ class TestDataProcessOrchestrator:
         assert captured["raw_pdf_sha256"] == pdf_hash
         assert captured["preserve_parse_result"] is True
 
+    @pytest.mark.asyncio
+    async def test_start_reuses_completed_paper_without_enqueue(
+        self,
+        orchestrator: DataProcessOrchestrator,
+        db,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_id = _insert_project(db)
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 completed-hash"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-completed-hash",
+                "title": "Existing",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "# parsed",
+                "raw_pdf_path": "/tmp/existing.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "COMPLETED",
+                "extraction_fact_check_status": "PASSED",
+                "analysis_fact_check_status": "PASSED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        async def fake_save_upload_file(self, upload_file, paper_id_arg: str) -> Path:
+            path = tmp_path / f"{paper_id_arg}.pdf"
+            path.write_bytes(pdf_bytes)
+            return path
+
+        async def fake_submit(self, task):
+            raise AssertionError("submit_task should not be called for completed paper")
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+        monkeypatch.setattr(DataProcessOrchestrator, "_submit_task", fake_submit)
+
+        task_state, paper_id = await orchestrator.start(
+            upload_file=UploadFile(filename="same.pdf", file=io.BytesIO(pdf_bytes)),
+            metadata={"title": "New title should be ignored"},
+        )
+
+        assert paper_id == "paper-completed-hash"
+        assert task_state.status == DataProcessTaskStatus.COMPLETED
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_start_reuse_processing_paper_returns_conflict(
+        self,
+        orchestrator: DataProcessOrchestrator,
+        db,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_id = _insert_project(db)
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 processing-hash"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-processing-hash",
+                "title": "Existing",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "",
+                "raw_pdf_path": "/tmp/existing-processing.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "PROCESSING",
+                "extraction_fact_check_status": "PENDING",
+                "analysis_fact_check_status": "PENDING",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        async def fake_save_upload_file(self, upload_file, paper_id_arg: str) -> Path:
+            path = tmp_path / f"{paper_id_arg}.pdf"
+            path.write_bytes(pdf_bytes)
+            return path
+
+        async def fake_submit(self, task):
+            raise AssertionError(
+                "submit_task should not be called for processing paper"
+            )
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+        monkeypatch.setattr(DataProcessOrchestrator, "_submit_task", fake_submit)
+
+        with pytest.raises(DataProcessDomainError) as exc:
+            await orchestrator.start(
+                upload_file=UploadFile(filename="same.pdf", file=io.BytesIO(pdf_bytes)),
+                metadata={},
+            )
+
+        assert exc.value.status_code == 409
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_start_reuses_failed_paper_and_enqueue_retry(
+        self,
+        orchestrator: DataProcessOrchestrator,
+        db,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_id = _insert_project(db)
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 failed-hash"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-failed-hash",
+                "title": "Existing",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "",
+                "raw_pdf_path": "/tmp/existing-failed.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "FAILED",
+                "extraction_fact_check_status": "FAILED",
+                "analysis_fact_check_status": "FAILED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        captured: dict[str, object] = {}
+
+        async def fake_save_upload_file(self, upload_file, paper_id_arg: str) -> Path:
+            path = tmp_path / f"{paper_id_arg}.pdf"
+            path.write_bytes(pdf_bytes)
+            return path
+
+        async def fake_submit(self, task):
+            captured["paper_id"] = task.paper_id
+            return DataProcessTaskState(
+                task_id="task-retry-failed",
+                paper_id=task.paper_id,
+                payload=task.payload,
+                status=DataProcessTaskStatus.QUEUED,
+                created_at=datetime.now(),
+            )
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+        monkeypatch.setattr(DataProcessOrchestrator, "_submit_task", fake_submit)
+
+        task_state, paper_id = await orchestrator.start(
+            upload_file=UploadFile(filename="same.pdf", file=io.BytesIO(pdf_bytes)),
+            metadata={},
+        )
+
+        assert paper_id == "paper-failed-hash"
+        assert task_state.status == DataProcessTaskStatus.QUEUED
+        assert captured["paper_id"] == "paper-failed-hash"
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
+
     def test_update_paper_success(self, orchestrator: DataProcessOrchestrator, db):
         project_id = _insert_project(db)
         paper_id = "paper-manual"

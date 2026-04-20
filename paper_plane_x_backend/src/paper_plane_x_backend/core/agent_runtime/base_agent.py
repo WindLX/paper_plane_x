@@ -237,50 +237,69 @@ class BaseAgent:
 
     def _validate_output(self, content: str) -> BaseModel:
         output_schema = self._get_output_schema()
+        original_error: AgentValidationError | None = None
 
         try:
             direct_loaded = json.loads(content)
             if not isinstance(direct_loaded, dict):
-                raise AgentValidationError(
+                original_error = AgentValidationError(
                     message="Invalid JSON output: root type must be JSON object",
                     agent_name=self.agent_name,
                     raw_output=content,
                 )
-            return output_schema.model_validate(direct_loaded)
-        except json.JSONDecodeError:
-            sanitized = self._sanitize_json_string_escapes(content)
-            if sanitized != content:
-                logger.debug(
-                    "event=agent.json_sanitize_applied stage=direct content_length=%s sanitized_length=%s",
-                    len(content),
-                    len(sanitized),
-                )
+            else:
                 try:
-                    direct_loaded = json.loads(sanitized)
-                    if not isinstance(direct_loaded, dict):
-                        raise AgentValidationError(
-                            message="Invalid JSON output: root type must be JSON object",
-                            agent_name=self.agent_name,
-                            raw_output=content,
-                        )
                     return output_schema.model_validate(direct_loaded)
-                except json.JSONDecodeError:
-                    logger.debug(
-                        "event=agent.json_sanitize_failed stage=direct content_length=%s",
-                        len(content),
+                except ValidationError as e:
+                    original_error = AgentValidationError(
+                        message=f"Schema validation failed: {e}",
+                        agent_name=self.agent_name,
+                        validation_errors=[dict(err) for err in e.errors()],
+                        raw_output=content,
                     )
-                    pass
+        except json.JSONDecodeError:
+            pass
 
-        json_candidates = self._collect_json_object_candidates(content)
-        if not json_candidates:
+        if original_error is None:
             try:
                 json.loads(content)
             except json.JSONDecodeError as e:
-                raise AgentValidationError(
+                original_error = AgentValidationError(
                     message=f"Invalid JSON output: {e}",
                     agent_name=self.agent_name,
                     raw_output=content,
-                ) from e
+                )
+
+        sanitized = self._sanitize_json_string_escapes(content)
+        if sanitized != content:
+            logger.debug(
+                "event=agent.json_sanitize_applied stage=direct content_length=%s sanitized_length=%s",
+                len(content),
+                len(sanitized),
+            )
+            try:
+                direct_loaded = json.loads(sanitized)
+                if not isinstance(direct_loaded, dict):
+                    raise AgentValidationError(
+                        message="Invalid JSON output: root type must be JSON object",
+                        agent_name=self.agent_name,
+                        raw_output=content,
+                    )
+                try:
+                    return output_schema.model_validate(direct_loaded)
+                except ValidationError:
+                    # 保留最原始顶层错误，不用清洗后的 schema 错误覆盖它。
+                    pass
+            except json.JSONDecodeError:
+                logger.debug(
+                    "event=agent.json_sanitize_failed stage=direct content_length=%s",
+                    len(content),
+                )
+
+        json_candidates = self._collect_json_object_candidates(content)
+        if not json_candidates:
+            if original_error is not None:
+                raise original_error
 
             raise AgentValidationError(
                 message="Invalid JSON output: root type must be JSON object",
@@ -297,6 +316,8 @@ class BaseAgent:
                     last_validation_error = e
 
             if last_validation_error is not None:
+                if original_error is not None:
+                    raise original_error
                 raise last_validation_error
 
             raise AgentValidationError(
@@ -305,6 +326,8 @@ class BaseAgent:
                 raw_output=content,
             )
         except ValidationError as e:
+            if original_error is not None:
+                raise original_error
             raise AgentValidationError(
                 message=f"Schema validation failed: {e}",
                 agent_name=self.agent_name,

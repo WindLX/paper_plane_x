@@ -61,4 +61,4 @@ role 为 assistant，name 为 FactCheckAgent 的 消息。
 在输出前自我审查：是否所有数值都完全来源于原文？是否剔除了所有主观赞美的形容词？是否严格遵循了 JSON 格式？是否键名与层级 100% 匹配？
 
 # Output
-严格根据 Pydantic 模型 `AnalysisReport` 定义的 JSON Schema 进行输出。**绝不包含**任何多余的文本或 Markdown 标记，**直接输出** JSON 字符串。
+严格根据 Pydantic 模型 `AnalysisAgentOutput` 定义的 JSON Schema 进行输出（顶层必须包含 `analysis_report` 字段）。**绝不包含**任何多余的文本或 Markdown 标记，**直接输出** JSON 字符串。

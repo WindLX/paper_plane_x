@@ -15,6 +15,47 @@ CONFIG_FILE_ENV = "PPX_CONFIG_FILE"
 DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[2] / "config" / "default.toml"
 
 
+class LogConfig(BaseModel):
+    """日志配置."""
+
+    level: str = Field(default="INFO", description="日志级别")
+    app_only: bool = Field(default=True, description="是否仅输出应用日志")
+    to_file: bool = Field(default=True, description="是否输出到文件")
+    file_path: Path = Field(
+        default=Path("./data/logs/backend.log"), description="日志文件路径"
+    )
+    file_max_bytes: int = Field(
+        default=10 * 1024 * 1024, description="日志文件最大大小"
+    )
+    file_backup_count: int = Field(default=5, description="日志文件轮转数量")
+
+
+class MinerUConfig(BaseModel):
+    """MinerU 配置."""
+
+    base_url: str = Field(
+        default="http://localhost:7860", description="MinerU API 地址"
+    )
+    output_dir: Path = Field(
+        default=Path("./data/papers"), description="MinerU 服务端输出目录参数"
+    )
+
+
+class DataProcessConfig(BaseModel):
+    """Data Process 运行时配置."""
+
+    max_retries: int = Field(default=3, description="事实核查失败最大重试次数")
+    worker_count: int = Field(default=5, description="后台数据处理 worker 数量")
+    shutdown_timeout: float = Field(
+        default=5.0,
+        description="后台数据处理 worker 池关闭超时时间（秒）",
+    )
+    task_max_seconds: float = Field(
+        default=600.0,
+        description="单个 data-process 任务最大执行时长（秒）",
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM 配置模型.
 
@@ -28,8 +69,8 @@ class LLMConfig(BaseModel):
         description="API 基础 URL (VLLM: http://localhost:8000/v1)",
     )
     temperature: float = Field(default=0.7, description="采样温度")
-    max_tokens: int | None = Field(default=4096, description="最大生成 token 数")
-    timeout: float = Field(default=600.0, description="请求超时时间（秒）")
+    max_tokens: int | None = Field(default=8192, description="最大生成 token 数")
+    timeout: float = Field(default=180.0, description="请求超时时间（秒）")
     custom_headers: dict[str, str] | None = Field(
         default=None, description="自定义 HTTP 请求头"
     )
@@ -108,12 +149,7 @@ class Settings(BaseSettings):
     # 应用配置
     app_name: str = "Paper Plane X"
     debug: bool = False
-    log_level: str = "INFO"
-    log_app_only: bool = True
-    log_to_file: bool = True
-    log_file_path: Path = Path("./data/logs/backend.log")
-    log_file_max_bytes: int = 10 * 1024 * 1024
-    log_file_backup_count: int = 5
+    log: LogConfig = Field(default_factory=LogConfig)
 
     # 服务器配置
     host: str = "127.0.0.1"
@@ -135,28 +171,10 @@ class Settings(BaseSettings):
     agent_llm: AgentLLMConfigs = Field(default_factory=AgentLLMConfigs)
 
     # MinerU 配置
-    mineru_base_url: str = Field(
-        default="http://localhost:7860", description="MinerU API 地址"
-    )
-    mineru_output_dir: Path = Field(
-        default=Path("./data/papers"), description="MinerU 服务端输出目录参数"
-    )
+    mineru: MinerUConfig = Field(default_factory=MinerUConfig)
 
     # Data Process 配置
-    data_process_max_retries: int = Field(
-        default=3, description="事实核查失败最大重试次数"
-    )
-    data_process_worker_count: int = Field(
-        default=2, description="后台数据处理 worker 数量"
-    )
-    data_process_shutdown_timeout: float = Field(
-        default=5.0,
-        description="后台数据处理 worker 池关闭超时时间（秒）",
-    )
-    data_process_task_max_seconds: float = Field(
-        default=600.0,
-        description="单个 data-process 任务最大执行时长（秒）",
-    )
+    data_process: DataProcessConfig = Field(default_factory=DataProcessConfig)
 
     @property
     def database_path(self) -> Path:
@@ -166,8 +184,8 @@ class Settings(BaseSettings):
     def ensure_directories(self) -> None:
         """确保必要的目录存在."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.mineru_output_dir.mkdir(parents=True, exist_ok=True)
-        self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.mineru.output_dir.mkdir(parents=True, exist_ok=True)
+        self.log.file_path.parent.mkdir(parents=True, exist_ok=True)
 
     def get_prompt_path(self, group: str, filename: str) -> Path:
         """获取 prompt 文件路径.
@@ -205,7 +223,7 @@ class Settings(BaseSettings):
         优先使用 Agent 特定配置，未设置则返回全局默认配置。
 
         Args:
-            agent_name: Agent 名称 (extraction, fact_check, planner, writer, reviewer)
+            agent_name: Agent 名称 (extraction, analysis, fact_check, planner, writer, reviewer)
 
         Returns:
             LLMConfig: LLM 配置
@@ -223,9 +241,11 @@ class Settings(BaseSettings):
         if agent_config is not None:
             # 合并配置：Agent 特定值覆盖全局默认值
             global_config = self.llm.model_dump()
-            agent_overrides = {
-                k: v for k, v in agent_config.model_dump().items() if v is not None
-            }
+            # 仅使用显式设置的字段，避免 Agent 默认值覆盖全局 llm 配置。
+            agent_overrides = agent_config.model_dump(
+                exclude_unset=True,
+                exclude_none=True,
+            )
             return LLMConfig(**{**global_config, **agent_overrides})
 
         return self.llm

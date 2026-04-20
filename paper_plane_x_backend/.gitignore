@@ -9,4 +9,5 @@ logs/
 example/*.pdf
 
 .env
+*.dev.toml
 export/

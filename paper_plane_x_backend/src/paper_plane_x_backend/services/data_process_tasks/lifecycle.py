@@ -16,9 +16,9 @@ def get_data_process_task_manager() -> DataProcessTaskManager:
     global _task_manager_instance
     if _task_manager_instance is None:
         _task_manager_instance = DataProcessTaskManager(
-            worker_count=settings.data_process_worker_count,
-            shutdown_timeout=settings.data_process_shutdown_timeout,
-            task_max_seconds=settings.data_process_task_max_seconds,
+            worker_count=settings.data_process.worker_count,
+            shutdown_timeout=settings.data_process.shutdown_timeout,
+            task_max_seconds=settings.data_process.task_max_seconds,
         )
     return _task_manager_instance
 

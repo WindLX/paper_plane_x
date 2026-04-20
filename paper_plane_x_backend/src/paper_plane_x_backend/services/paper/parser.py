@@ -28,13 +28,13 @@ class PaperParser:
 
     def __init__(self, mineru_client: MinerUClient | None = None) -> None:
         self.mineru = mineru_client or MinerUClient(
-            base_url=settings.mineru_base_url,
-            output_dir=settings.mineru_output_dir,
+            base_url=settings.mineru.base_url,
+            output_dir=settings.mineru.output_dir,
         )
 
     async def parse(self, pdf_path: Path, paper_id: str) -> tuple[str, list[Path]]:
         """使用 MinerU 解析 PDF，返回 markdown 内容和图片路径列表."""
-        output_dir = settings.mineru_output_dir / paper_id
+        output_dir = settings.mineru.output_dir / paper_id
         output_dir.mkdir(parents=True, exist_ok=True)
         result = await self.mineru.parse_pdf(
             file_path=pdf_path,

@@ -30,8 +30,8 @@ def test_get_agent_llm_config_merges_overrides() -> None:
     assert cfg.temperature == 0.1
     assert cfg.api_key == "k-global"
     assert cfg.base_url == "http://global"
-    # 当前实现中，Agent 配置对象的默认值也会参与覆盖。
-    assert cfg.max_tokens == 4096
+    # 仅当 Agent 显式设置字段时才覆盖，全局 llm 配置应保留。
+    assert cfg.max_tokens == 2048
     assert cfg.is_vlm is True
 
 
@@ -46,3 +46,16 @@ def test_get_agent_llm_config_returns_global_when_missing() -> None:
     assert cfg.model == "global-model"
     assert cfg.api_key == "k"
     assert cfg.is_vlm is False
+
+
+def test_settings_supports_grouped_keys() -> None:
+    settings = Settings(
+        log={"level": "ERROR", "app_only": False},
+        mineru={"output_dir": "./tmp/papers"},
+        data_process={"shutdown_timeout": 12.5},
+    )
+
+    assert settings.log.level == "ERROR"
+    assert settings.log.app_only is False
+    assert str(settings.mineru.output_dir) == "tmp/papers"
+    assert settings.data_process.shutdown_timeout == 12.5

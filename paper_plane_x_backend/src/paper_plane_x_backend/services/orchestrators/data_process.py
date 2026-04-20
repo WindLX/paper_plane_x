@@ -138,7 +138,7 @@ class DataProcessOrchestrator:
             )
 
     async def _save_upload_file(self, upload_file: UploadFile, paper_id: str) -> Path:
-        upload_dir = settings.mineru_output_dir / paper_id
+        upload_dir = settings.mineru.output_dir / paper_id
         upload_dir.mkdir(parents=True, exist_ok=True)
 
         suffix = Path(upload_file.filename or "original.pdf").suffix or ".pdf"
@@ -153,13 +153,6 @@ class DataProcessOrchestrator:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
-
-    def _find_reusable_paper_by_hash(
-        self,
-        *,
-        raw_pdf_sha256: str,
-    ) -> Paper | None:
-        return self.paper_repo.find_by_pdf_hash(raw_pdf_sha256=raw_pdf_sha256)
 
     def _reset_paper_for_retry(
         self,
@@ -224,7 +217,7 @@ class DataProcessOrchestrator:
             pdf_path = await self._save_upload_file(upload_file, paper.paper_id)
             raw_pdf_sha256 = self._compute_pdf_sha256(pdf_path)
 
-            reusable_paper = self._find_reusable_paper_by_hash(
+            reusable_paper = self.paper_repo.find_by_pdf_hash(
                 raw_pdf_sha256=raw_pdf_sha256,
             )
             if reusable_paper is not None:
@@ -234,6 +227,58 @@ class DataProcessOrchestrator:
                         reusable_paper.paper_id,
                     )
                 self.db.delete("papers", "paper_id = ?", (paper.paper_id,))
+
+                if reusable_paper.extraction_status in {
+                    ExtractionStatus.COMPLETED,
+                    ExtractionStatus.HUMAN_COMPLETED,
+                }:
+                    task_state = DataProcessTaskState(
+                        task_id=str(uuid4()),
+                        paper_id=reusable_paper.paper_id,
+                        payload={
+                            "pdf_path": reusable_paper.raw_pdf_path or str(pdf_path),
+                        },
+                        status=DataProcessTaskStatus.COMPLETED,
+                        created_at=datetime.now(),
+                        started_at=datetime.now(),
+                        finished_at=datetime.now(),
+                    )
+                    logger.info(
+                        "event=data_process.paper_reused_completed paper_id=%s",
+                        reusable_paper.paper_id,
+                    )
+                    return task_state, reusable_paper.paper_id
+
+                if reusable_paper.extraction_status in {
+                    ExtractionStatus.PENDING,
+                    ExtractionStatus.PROCESSING,
+                }:
+                    logger.info(
+                        "event=data_process.paper_reused_conflict_processing paper_id=%s status=%s",
+                        reusable_paper.paper_id,
+                        reusable_paper.extraction_status,
+                    )
+                    raise DataProcessDomainError(
+                        status.HTTP_409_CONFLICT,
+                        (
+                            "Paper already exists and is still processing: "
+                            f"{reusable_paper.paper_id}"
+                        ),
+                    )
+
+                if reusable_paper.extraction_status != ExtractionStatus.FAILED:
+                    logger.warning(
+                        "event=data_process.paper_reused_unexpected_status paper_id=%s status=%s",
+                        reusable_paper.paper_id,
+                        reusable_paper.extraction_status,
+                    )
+                    raise DataProcessDomainError(
+                        status.HTTP_409_CONFLICT,
+                        (
+                            "Paper already exists but is not retryable with current status: "
+                            f"{reusable_paper.extraction_status}"
+                        ),
+                    )
 
                 queue_task = DataProcessQueueTask(
                     task_id=str(uuid4()),

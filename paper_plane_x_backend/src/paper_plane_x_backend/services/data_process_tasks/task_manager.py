@@ -372,5 +372,5 @@ class DataProcessTaskManager:
         await processor.process(
             paper_id=paper_id,
             pdf_path=Path(pdf_path),
-            max_retries=settings.data_process_max_retries,
+            max_retries=settings.data_process.max_retries,
         )

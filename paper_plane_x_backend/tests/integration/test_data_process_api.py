@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,208 @@ class TestDataProcessAPI:
             files={"pdf_file": ("sample.pdf", b"%PDF-1.4 test", "application/pdf")},
         )
         assert response.status_code == 202
+
+    def test_start_data_process_reuses_completed_paper_without_enqueue(
+        self,
+        client: TestClient,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        create_project_resp = client.post(
+            "/api/v1/projects",
+            json={"name": "Reuse Completed Project"},
+        )
+        assert create_project_resp.status_code == 201
+        project_id = create_project_resp.json()["project_id"]
+
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 completed-hash-api"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-completed-api",
+                "title": "Existing Completed",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "# parsed",
+                "raw_pdf_path": "/tmp/existing-completed-api.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "COMPLETED",
+                "extraction_fact_check_status": "PASSED",
+                "analysis_fact_check_status": "PASSED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        async def fake_save_upload_file(self, upload_file, paper_id: str) -> Path:
+            output = tmp_path / f"{paper_id}.pdf"
+            output.write_bytes(pdf_bytes)
+            return output
+
+        async def fake_submit_task(
+            self, task: DataProcessQueueTask
+        ) -> DataProcessTaskState:
+            raise AssertionError("submit_task should not be called for completed paper")
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+        monkeypatch.setattr(DataProcessOrchestrator, "_submit_task", fake_submit_task)
+
+        response = client.post(
+            "/api/v1/papers",
+            files={
+                "pdf_file": ("same.pdf", pdf_bytes, "application/pdf"),
+            },
+            data={"title": "should be ignored"},
+        )
+
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["resource_id"] == "paper-completed-api"
+        assert payload["status"] == "COMPLETED"
+        assert "skipped enqueue" in payload["message"]
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
+
+    def test_start_data_process_conflict_when_same_hash_processing(
+        self,
+        client: TestClient,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        create_project_resp = client.post(
+            "/api/v1/projects",
+            json={"name": "Reuse Processing Project"},
+        )
+        assert create_project_resp.status_code == 201
+        project_id = create_project_resp.json()["project_id"]
+
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 processing-hash-api"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-processing-api",
+                "title": "Existing Processing",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "",
+                "raw_pdf_path": "/tmp/existing-processing-api.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "PROCESSING",
+                "extraction_fact_check_status": "PENDING",
+                "analysis_fact_check_status": "PENDING",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        async def fake_save_upload_file(self, upload_file, paper_id: str) -> Path:
+            output = tmp_path / f"{paper_id}.pdf"
+            output.write_bytes(pdf_bytes)
+            return output
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+
+        response = client.post(
+            "/api/v1/papers",
+            files={
+                "pdf_file": ("same.pdf", pdf_bytes, "application/pdf"),
+            },
+        )
+
+        assert response.status_code == 409
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
+
+    def test_start_data_process_reuses_failed_paper_and_enqueue(
+        self,
+        client: TestClient,
+        db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        create_project_resp = client.post(
+            "/api/v1/projects",
+            json={"name": "Reuse Failed Project"},
+        )
+        assert create_project_resp.status_code == 201
+        project_id = create_project_resp.json()["project_id"]
+
+        now = datetime.now()
+        pdf_bytes = b"%PDF-1.4 failed-hash-api"
+        pdf_hash = sha256(pdf_bytes).hexdigest()
+        queued_tasks: list[DataProcessQueueTask] = []
+
+        _insert_linked_paper(
+            db,
+            project_id,
+            {
+                "paper_id": "paper-failed-api",
+                "title": "Existing Failed",
+                "authors": json.dumps([], ensure_ascii=False),
+                "md_content": "",
+                "raw_pdf_path": "/tmp/existing-failed-api.pdf",
+                "raw_pdf_sha256": pdf_hash,
+                "images_paths": json.dumps([], ensure_ascii=False),
+                "extraction_status": "FAILED",
+                "extraction_fact_check_status": "FAILED",
+                "analysis_fact_check_status": "FAILED",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        async def fake_save_upload_file(self, upload_file, paper_id: str) -> Path:
+            output = tmp_path / f"{paper_id}.pdf"
+            output.write_bytes(pdf_bytes)
+            return output
+
+        async def fake_submit_task(
+            self, task: DataProcessQueueTask
+        ) -> DataProcessTaskState:
+            state = _stub_enqueue_state(task)
+            queued_tasks.append(task)
+            return state
+
+        monkeypatch.setattr(
+            DataProcessOrchestrator, "_save_upload_file", fake_save_upload_file
+        )
+        monkeypatch.setattr(DataProcessOrchestrator, "_submit_task", fake_submit_task)
+
+        response = client.post(
+            "/api/v1/papers",
+            files={
+                "pdf_file": ("same.pdf", pdf_bytes, "application/pdf"),
+            },
+        )
+
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["resource_id"] == "paper-failed-api"
+        assert payload["status"] == "QUEUED"
+        assert len(queued_tasks) == 1
+        assert queued_tasks[0].paper_id == "paper-failed-api"
+
+        count_row = db.fetchone("SELECT COUNT(*) AS count FROM papers")
+        assert count_row is not None
+        assert count_row["count"] == 1
 
     def test_start_data_process_rejects_invalid_custom_meta(
         self, client: TestClient

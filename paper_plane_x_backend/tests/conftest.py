@@ -27,8 +27,8 @@ from paper_plane_x_backend.services.data_process_tasks.task_manager import (
 # 在导入 app 之前切换测试运行目录，避免生命周期初始化写入 ./data。
 _TEST_RUNTIME_DIR = Path(tempfile.mkdtemp(prefix="ppx-tests-"))
 settings.data_dir = _TEST_RUNTIME_DIR
-settings.mineru_output_dir = _TEST_RUNTIME_DIR / "papers"
-settings.log_file_path = _TEST_RUNTIME_DIR / "logs" / "backend.log"
+settings.mineru.output_dir = _TEST_RUNTIME_DIR / "papers"
+settings.log.file_path = _TEST_RUNTIME_DIR / "logs" / "backend.log"
 
 
 @pytest.fixture(scope="session", autouse=True)

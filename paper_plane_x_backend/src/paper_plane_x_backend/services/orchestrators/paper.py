@@ -11,6 +11,9 @@ from fastapi import UploadFile, status
 
 from paper_plane_x_backend.config import settings
 from paper_plane_x_backend.models import Paper
+from paper_plane_x_backend.services.data_process_tasks.models import (
+    DataProcessTaskState,
+)
 from paper_plane_x_backend.services.data_process_tasks.task_manager import (
     DataProcessTaskManager,
 )
@@ -74,7 +77,7 @@ class PaperOrchestrator:
         publication: str | None,
         doi: str | None,
         custom_meta: str | None,
-    ) -> tuple[str, str]:
+    ) -> tuple[DataProcessTaskState, str]:
         try:
             metadata = self.data_process_orchestrator.build_metadata(
                 title=title,
@@ -88,7 +91,7 @@ class PaperOrchestrator:
                 upload_file=upload_file,
                 metadata=metadata,
             )
-            return task_state.task_id, paper_id
+            return task_state, paper_id
         except DataProcessDomainError as exc:
             raise PaperDomainError(exc.status_code, exc.detail) from exc
 
@@ -196,7 +199,7 @@ class PaperOrchestrator:
 
         self.db.delete("papers", "paper_id = ?", (paper_id,))
 
-        paper_dir = settings.mineru_output_dir / paper_id
+        paper_dir = settings.mineru.output_dir / paper_id
         if paper_dir.exists():
             try:
                 shutil.rmtree(paper_dir)

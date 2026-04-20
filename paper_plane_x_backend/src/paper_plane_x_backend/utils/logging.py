@@ -40,13 +40,13 @@ def setup_logging() -> None:
     settings.ensure_directories()
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]
-    if settings.log_to_file:
-        _active_log_file_path = _build_log_file_path_for_startup(settings.log_file_path)
+    if settings.log.to_file:
+        _active_log_file_path = _build_log_file_path_for_startup(settings.log.file_path)
         handlers.append(
             RotatingFileHandler(
                 filename=_active_log_file_path,
-                maxBytes=settings.log_file_max_bytes,
-                backupCount=settings.log_file_backup_count,
+                maxBytes=settings.log.file_max_bytes,
+                backupCount=settings.log.file_backup_count,
                 encoding="utf-8",
             )
         )
@@ -54,13 +54,13 @@ def setup_logging() -> None:
         _active_log_file_path = None
 
     logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        level=getattr(logging, settings.log.level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         handlers=handlers,
         force=True,
     )
 
-    if settings.log_app_only:
+    if settings.log.app_only:
         app_filter = AppNamespaceFilter(("paper_plane_x_backend",))
         for handler in logging.getLogger().handlers:
             handler.addFilter(app_filter)

@@ -101,7 +101,7 @@ async def create_paper(
 ) -> DataProcessSubmitResponse:
     orchestrator = _build_orchestrator(db, task_manager)
     try:
-        task_id, paper_id = await orchestrator.create_paper_and_start_processing(
+        task_state, paper_id = await orchestrator.create_paper_and_start_processing(
             upload_file=pdf_file,
             title=title,
             authors=authors,
@@ -114,12 +114,16 @@ async def create_paper(
         _raise_as_http(exc)
 
     return DataProcessSubmitResponse(
-        task_id=task_id,
-        status=DataProcessTaskStatus.QUEUED,
+        task_id=task_state.task_id,
+        status=task_state.status,
         paper_id=paper_id,
         resource_type="paper",
         resource_id=paper_id,
-        message="Data-process task queued",
+        message=(
+            "Data-process task queued"
+            if task_state.status == DataProcessTaskStatus.QUEUED
+            else "Paper already completed, skipped enqueue"
+        ),
     )
 
 
