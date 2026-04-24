@@ -1,3 +1,11 @@
 [submodule "paper_plane_x_backend"]
 	path = paper_plane_x_backend
-	url = /home/windlx/Work/Project/paper_plane_x/paper_plane_x_backend
+	url = git@github.com:WindLX/paper_plane_x_backend.git
+
+[submodule "paper_plane_x_frontend"]
+	path = paper_plane_x_frontend
+	url = git@github.com:WindLX/paper_plane_x_frontend.git
+
+[submodule "paper_plane_x_zotero"]
+	path = paper_plane_x_zotero
+	url = git@github.com:WindLX/paper_plane_x_zotero.git
