@@ -307,6 +307,7 @@ class TestBaseAgent:
             if call_count == 1:
                 return LLMResponse(
                     content=None,
+                    reasoning_content="use add tool",
                     tool_calls=[
                         ToolCallMessage(
                             id="call_1",
@@ -326,6 +327,7 @@ class TestBaseAgent:
         result = await self._run_with_input(agent, {"question": "1+2"})
         assert result == "3"
         assert call_count == 2
+        assert agent.memory.get_messages()[1]["reasoning_content"] == "use add tool"
 
     @pytest.mark.asyncio
     async def test_normal_mode_max_steps_exceeded(self) -> None:

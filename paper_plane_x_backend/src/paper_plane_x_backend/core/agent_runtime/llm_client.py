@@ -24,6 +24,7 @@ class LLMResponse(BaseModel):
     """LLM 响应包装类."""
 
     content: str | None = None
+    reasoning_content: str | None = None
     tool_calls: list[ToolCallMessage] = Field(
         default_factory=lambda: cast(list[ToolCallMessage], [])
     )
@@ -46,7 +47,9 @@ class LLMClient:
         max_tokens: int | None = None,
         timeout: float = 600.0,
         custom_headers: dict[str, str] | None = None,
-        is_vlm: bool = False,
+        thinking_enabled: bool = False,
+        reasoning_effort: str | None = None,
+        extra_body: dict[str, Any] | None = None,
     ):
         self.model = model or settings.llm.model
         self.api_key = api_key or settings.llm.api_key
@@ -55,7 +58,9 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.custom_headers = custom_headers or {}
-        self.is_vlm = is_vlm
+        self.thinking_enabled = thinking_enabled
+        self.reasoning_effort = reasoning_effort
+        self.extra_body = extra_body or {}
 
     @classmethod
     def from_config(cls, config: LLMConfig) -> "LLMClient":
@@ -67,7 +72,9 @@ class LLMClient:
             max_tokens=config.max_tokens,
             timeout=config.timeout,
             custom_headers=config.custom_headers,
-            is_vlm=config.is_vlm,
+            thinking_enabled=config.thinking_enabled,
+            reasoning_effort=config.reasoning_effort,
+            extra_body=config.extra_body,
         )
 
     def _parse_response(self, response: Any) -> LLMResponse:
@@ -111,8 +118,12 @@ class LLMClient:
                 )
 
         usage = dict(response.usage) if getattr(response, "usage", None) else {}
+        reasoning_content = getattr(message, "reasoning_content", None)
         return LLMResponse(
             content=message.content,
+            reasoning_content=(
+                reasoning_content if isinstance(reasoning_content, str) else None
+            ),
             tool_calls=tool_calls,
             model=getattr(response, "model", None),
             usage=usage,
@@ -144,12 +155,13 @@ class LLMClient:
     ) -> LLMResponse:
         resolved_model, custom_provider = self._resolve_model_provider()
         logger.debug(
-            "event=llm.request model=%s provider=%s message_count=%s tool_count=%s structured=%s",
+            "event=llm.request model=%s provider=%s message_count=%s tool_count=%s structured=%s reasoning_effort=%s",
             resolved_model,
             custom_provider,
             len(messages),
             0 if tools is None else len(tools),
             output_schema is not None,
+            self.reasoning_effort if self.thinking_enabled else "disabled",
         )
         request: dict[str, Any] = {
             "model": resolved_model,
@@ -175,12 +187,39 @@ class LLMClient:
                 "schema": output_schema.model_json_schema(),
             }
 
+        request_extra_body = dict(self.extra_body)
+        if self.thinking_enabled:
+            request_extra_body.setdefault("thinking", {"type": "enabled"})
+
+        kwargs_extra_body = kwargs.pop("extra_body", None)
+        if isinstance(kwargs_extra_body, dict):
+            request_extra_body.update(cast(dict[str, Any], kwargs_extra_body))
+
+        if request_extra_body:
+            request["extra_body"] = request_extra_body
+
+        reasoning_effort = kwargs.pop("reasoning_effort", self.reasoning_effort)
+        if reasoning_effort is not None:
+            request["reasoning_effort"] = reasoning_effort
+            allowed_openai_params = kwargs.pop("allowed_openai_params", None)
+            merged_allowed_openai_params: list[str] = []
+            if isinstance(allowed_openai_params, list):
+                merged_allowed_openai_params.extend(
+                    item
+                    for item in cast(list[Any], allowed_openai_params)
+                    if isinstance(item, str)
+                )
+            if "reasoning_effort" not in merged_allowed_openai_params:
+                merged_allowed_openai_params.append("reasoning_effort")
+            request["allowed_openai_params"] = merged_allowed_openai_params
+
         request.update(kwargs)
         response = await acompletion(**request)
         parsed = self._parse_response(response)
         logger.debug(
-            "event=llm.response model=%s has_content=%s tool_call_count=%s usage=%s",
+            "event=llm.response model=%s reasoning_effort=%s has_content=%s tool_call_count=%s usage=%s ",
             parsed.model or self.model,
+            self.reasoning_effort if self.thinking_enabled else "disabled",
             bool(parsed.content),
             len(parsed.tool_calls),
             parsed.usage,

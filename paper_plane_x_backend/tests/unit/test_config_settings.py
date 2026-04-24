@@ -1,5 +1,8 @@
 """Settings tests."""
 
+import tomllib
+from pathlib import Path
+
 from paper_plane_x_backend.config import AgentLLMConfigs, LLMConfig, Settings
 
 
@@ -13,12 +16,17 @@ def test_get_agent_llm_config_merges_overrides() -> None:
             max_tokens=2048,
             timeout=60.0,
             custom_headers={"X-G": "1"},
+            thinking_enabled=True,
+            reasoning_effort="high",
+            extra_body={"thinking": {"type": "enabled"}},
             is_vlm=False,
         ),
         agent_llm=AgentLLMConfigs(
             extraction=LLMConfig(
                 model="extract-model",
                 temperature=0.1,
+                thinking_enabled=False,
+                reasoning_effort="low",
                 is_vlm=True,
             )
         ),
@@ -32,7 +40,53 @@ def test_get_agent_llm_config_merges_overrides() -> None:
     assert cfg.base_url == "http://global"
     # 仅当 Agent 显式设置字段时才覆盖，全局 llm 配置应保留。
     assert cfg.max_tokens == 2048
+    assert cfg.thinking_enabled is False
+    assert cfg.reasoning_effort == "low"
+    assert cfg.extra_body == {"thinking": {"type": "enabled"}}
     assert cfg.is_vlm is True
+
+
+def test_get_agent_llm_config_inherits_reasoning_defaults_when_unset() -> None:
+    settings = Settings(
+        llm=LLMConfig(
+            model="global-model",
+            thinking_enabled=True,
+            reasoning_effort="high",
+            extra_body={"metadata": {"tier": "global"}},
+        ),
+        agent_llm=AgentLLMConfigs(
+            analysis=LLMConfig(
+                model="analysis-model",
+            )
+        ),
+    )
+
+    cfg = settings.get_agent_llm_config("analysis")
+
+    assert cfg.model == "analysis-model"
+    assert cfg.thinking_enabled is True
+    assert cfg.reasoning_effort == "high"
+    assert cfg.extra_body == {"metadata": {"tier": "global"}}
+
+
+def test_get_agent_llm_config_can_override_extra_body() -> None:
+    settings = Settings(
+        llm=LLMConfig(
+            model="global-model",
+            extra_body={"metadata": {"tier": "global"}},
+        ),
+        agent_llm=AgentLLMConfigs(
+            reviewer=LLMConfig(
+                model="reviewer-model",
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+        ),
+    )
+
+    cfg = settings.get_agent_llm_config("reviewer")
+
+    assert cfg.model == "reviewer-model"
+    assert cfg.extra_body == {"thinking": {"type": "enabled"}}
 
 
 def test_get_agent_llm_config_returns_global_when_missing() -> None:
@@ -59,3 +113,11 @@ def test_settings_supports_grouped_keys() -> None:
     assert settings.log.app_only is False
     assert str(settings.mineru.output_dir) == "tmp/papers"
     assert settings.data_process.shutdown_timeout == 12.5
+
+
+def test_default_toml_documents_reasoning_switch() -> None:
+    config_path = Path(__file__).resolve().parents[2] / "config" / "default.toml"
+
+    data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+
+    assert data["llm"]["thinking_enabled"] is False

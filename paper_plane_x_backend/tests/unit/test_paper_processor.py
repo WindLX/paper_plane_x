@@ -108,8 +108,10 @@ class _FakeParserCanceled:
 
 
 class _FakeAgentGroupSuccess:
-    extraction_last_fact_check_trace_id = "trace-extraction-ok"
-    analysis_last_fact_check_trace_id = "trace-analysis-ok"
+    extraction_trace_ids = ["trace-extraction-1"]
+    analysis_trace_ids = ["trace-analysis-1"]
+    extraction_fact_check_trace_ids = ["trace-extraction-ok"]
+    analysis_fact_check_trace_ids = ["trace-analysis-ok"]
 
     async def run_parallel_loops(  # type: ignore[no-untyped-def]
         self,
@@ -129,8 +131,10 @@ class _FakeAgentGroupSuccess:
 
 
 class _FakeAgentGroupFail:
-    extraction_last_fact_check_trace_id = "trace-fail-extraction"
-    analysis_last_fact_check_trace_id = "trace-fail-analysis"
+    extraction_trace_ids = ["trace-fail-extraction-agent"]
+    analysis_trace_ids = []
+    extraction_fact_check_trace_ids = ["trace-fail-extraction"]
+    analysis_fact_check_trace_ids = ["trace-fail-analysis"]
 
     async def run_parallel_loops(  # type: ignore[no-untyped-def]
         self,
@@ -143,8 +147,10 @@ class _FakeAgentGroupFail:
 
 
 class _FakeAgentGroupAnalysisFailed:
-    extraction_last_fact_check_trace_id = "trace-extraction-pass"
-    analysis_last_fact_check_trace_id = "trace-analysis-fail"
+    extraction_trace_ids = ["trace-extraction-pass-agent"]
+    analysis_trace_ids = ["trace-analysis-agent"]
+    extraction_fact_check_trace_ids = ["trace-extraction-pass"]
+    analysis_fact_check_trace_ids = ["trace-analysis-fail"]
 
     async def run_parallel_loops(  # type: ignore[no-untyped-def]
         self,
@@ -186,7 +192,8 @@ async def test_process_success_updates_paper(db) -> None:
         agent_group=_FakeAgentGroupSuccess(),  # type: ignore[arg-type]
     )
 
-    updated = await processor.process(paper.paper_id)
+    result = await processor.process(paper.paper_id)
+    updated = result.paper
 
     assert updated.extraction_status == ExtractionStatus.COMPLETED
     assert updated.extraction_fact_check_status == FactCheckStatus.PASSED
@@ -195,8 +202,6 @@ async def test_process_success_updates_paper(db) -> None:
     assert updated.quick_scan.get("quick_summary") == "ok"
     assert updated.analysis_report is not None
     assert updated.analysis_report.get("summary") == "analysis-ok"
-    assert updated.extraction_final_fact_check_trace_id == "trace-extraction-ok"
-    assert updated.analysis_final_fact_check_trace_id == "trace-analysis-ok"
     assert updated.extraction_retry_count == 1
     assert updated.analysis_retry_count == 2
 
@@ -218,8 +223,6 @@ async def test_process_failure_marks_failed_and_preserves_trace(db) -> None:
     failed = repo.get(paper.paper_id)
     assert failed is not None
     assert failed.extraction_status == ExtractionStatus.FAILED
-    assert failed.extraction_final_fact_check_trace_id == "trace-fail-extraction"
-    assert failed.analysis_final_fact_check_trace_id == "trace-fail-analysis"
     assert failed.extraction_fact_check_result is not None
     assert "mineru unavailable" in str(failed.extraction_fact_check_result)
 
@@ -266,14 +269,13 @@ async def test_process_partial_fact_check_failure_sets_human_completed(db) -> No
         agent_group=_FakeAgentGroupAnalysisFailed(),  # type: ignore[arg-type]
     )
 
-    updated = await processor.process(paper.paper_id)
+    result = await processor.process(paper.paper_id)
+    updated = result.paper
 
     assert updated.extraction_status == ExtractionStatus.HUMAN_COMPLETED
     assert updated.extraction_fact_check_status == FactCheckStatus.PASSED
     assert updated.analysis_fact_check_status == FactCheckStatus.FAILED
     assert updated.extraction_retry_count == 1
     assert updated.analysis_retry_count == 2
-    assert updated.extraction_final_fact_check_trace_id == "trace-extraction-pass"
-    assert updated.analysis_final_fact_check_trace_id == "trace-analysis-fail"
     assert updated.analysis_fact_check_result is not None
     assert updated.analysis_fact_check_result.get("is_passed") is False

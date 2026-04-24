@@ -2,7 +2,9 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 from pydantic_settings import (
     BaseSettings,
@@ -13,6 +15,27 @@ from pydantic_settings import (
 
 CONFIG_FILE_ENV = "PPX_CONFIG_FILE"
 DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[2] / "config" / "default.toml"
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
+
+def _read_config_file_from_dotenv() -> str | None:
+    """从当前工作目录的 .env 读取 PPX_CONFIG_FILE。"""
+    candidates = [
+        Path(".env"),
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for dotenv_path in candidates:
+        if not dotenv_path.exists():
+            continue
+        dotenv_data = dotenv_values(dotenv_path)
+        raw = dotenv_data.get(CONFIG_FILE_ENV)
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip()
+        if value:
+            return value
+    return None
 
 
 class LogConfig(BaseModel):
@@ -74,6 +97,18 @@ class LLMConfig(BaseModel):
     custom_headers: dict[str, str] | None = Field(
         default=None, description="自定义 HTTP 请求头"
     )
+    thinking_enabled: bool = Field(
+        default=False,
+        description="是否启用模型思考模式（由 LLMClient 映射到兼容参数）",
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="推理强度参数（如 OpenAI reasoning_effort，按模型能力生效）",
+    )
+    extra_body: dict[str, Any] | None = Field(
+        default=None,
+        description="额外请求体参数，用于透传厂商私有扩展",
+    )
     is_vlm: bool = Field(
         default=False,
         description="是否为视觉模型（启用多模态消息处理）",
@@ -130,7 +165,7 @@ class Settings(BaseSettings):
         4. TOML 配置文件（默认 `config/default.toml`，可由 `PPX_CONFIG_FILE` 指定）
         5. 文件密钥
         """
-        raw_toml_path = os.getenv(CONFIG_FILE_ENV)
+        raw_toml_path = os.getenv(CONFIG_FILE_ENV) or _read_config_file_from_dotenv()
         toml_path = Path(raw_toml_path) if raw_toml_path else DEFAULT_CONFIG_FILE
 
         toml_settings = TomlConfigSettingsSource(

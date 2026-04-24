@@ -81,6 +81,7 @@ class AssistantMessage(BaseModel):
 
     role: Literal["assistant"] = "assistant"
     content: str | None = Field(default=None, description="助手回复")
+    reasoning_content: str | None = Field(default=None, description="模型思考内容")
     name: str | None = Field(default=None, description="助手名称（可选）")
     tool_calls: list[ToolCallMessage] | None = Field(
         default=None,

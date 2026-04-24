@@ -46,20 +46,6 @@ class FakeDB:
         self.inserts.append((table, data))
 
 
-def make_response(
-    *,
-    content: str | None = None,
-    tool_calls: list[Any] | None = None,
-    usage: dict[str, Any] | None = None,
-) -> Any:
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=message)],
-        usage=usage,
-        model="test-model",
-    )
-
-
 class TestBaseAgentExtended:
     @staticmethod
     async def _run_with_input(
@@ -94,6 +80,7 @@ class TestBaseAgentExtended:
         async def mock_generate(messages, **kwargs):
             return LLMResponse(
                 content="ok",
+                reasoning_content="trace thinking",
                 model="trace-model",
                 usage={
                     "prompt_tokens": 11,
@@ -120,13 +107,50 @@ class TestBaseAgentExtended:
         table, payload = fake_db.inserts[0]
         assert table == "agent_traces"
         assert payload["agent_name"] == agent.agent_name
-        assert "latest_input_message" in payload
         assert payload["llm_model"] == "trace-model"
         assert payload["prompt_tokens"] == 11
         assert payload["completion_tokens"] == 7
         assert payload["total_tokens"] == 18
         assert "cache_hit" in payload["usage_payload"]
-        assert agent.last_trace_id is not None
+        assert agent.trace_ids == [payload["trace_id"]]
+
+    @pytest.mark.asyncio
+    async def test_api_mode_collects_all_trace_ids_across_validation_retries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent = BaseAgent(
+            output_schema=ApiOutput,
+            mode="api",
+            save_trace=True,
+            max_steps=2,
+        )
+        fake_db = FakeDB()
+        monkeypatch.setattr(
+            "paper_plane_x_backend.core.agent_runtime.base_agent.get_db",
+            lambda: fake_db,
+        )
+
+        call_count = 0
+
+        async def mock_generate_structured(messages, output_schema, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return LLMResponse(content="{invalid json}", model="m", usage={})
+            return LLMResponse(content='{"value": "ok"}', model="m", usage={})
+
+        agent.llm.generate_structured = mock_generate_structured
+
+        result = await self._run_with_input(agent, {"q": "x"})
+
+        assert isinstance(result, ApiOutput)
+        assert len(fake_db.inserts) == 2
+        saved_trace_ids = [
+            payload["trace_id"]
+            for table, payload in fake_db.inserts
+            if table == "agent_traces"
+        ]
+        assert agent.trace_ids == saved_trace_ids
 
     @pytest.mark.asyncio
     async def test_tool_argument_json_error_bubbles_to_execution_error(self) -> None:
@@ -229,7 +253,10 @@ class TestMemoryManagerExtended:
         memory = MemoryManager()
 
         memory.append_user_message({"q": "old"})
-        memory.append_assistant_message(content="old assistant")
+        memory.append_assistant_message(
+            content="old assistant",
+            reasoning_content="old thinking",
+        )
         memory.append_tool_message(
             ToolMessage(
                 role="tool", tool_call_id="t1", name="search", content="old tool"
@@ -237,7 +264,10 @@ class TestMemoryManagerExtended:
         )
 
         memory.update_user_message({"q": "new"})
-        memory.update_assistant_message(content="new assistant")
+        memory.update_assistant_message(
+            content="new assistant",
+            reasoning_content="new thinking",
+        )
         memory.update_tool_message(
             ToolMessage(
                 role="tool", tool_call_id="t1", name="search", content="new tool"
@@ -248,7 +278,15 @@ class TestMemoryManagerExtended:
         assert messages[0]["role"] == "user"
         assert '"q": "new"' in str(messages[0]["content"])
         assert messages[1]["content"] == "new assistant"
+        assert messages[1]["reasoning_content"] == "new thinking"
         assert messages[2]["content"] == "new tool"
+
+    def test_assistant_message_omits_empty_reasoning_content(self) -> None:
+        memory = MemoryManager()
+
+        memory.append_assistant_message(content="ok")
+
+        assert memory.get_messages() == [{"role": "assistant", "content": "ok"}]
 
     def test_delete_messages_by_role(self) -> None:
         memory = MemoryManager()
@@ -291,7 +329,9 @@ class TestLLMClientExtended:
             max_tokens=12,
             timeout=9.0,
             custom_headers={"X-Test": "1"},
-            is_vlm=True,
+            thinking_enabled=True,
+            reasoning_effort="high",
+            extra_body={"vendor": {"flag": True}},
         )
         client = LLMClient.from_config(cfg)
 
@@ -302,23 +342,14 @@ class TestLLMClientExtended:
         assert client.max_tokens == 12
         assert client.timeout == 9.0
         assert client.custom_headers == {"X-Test": "1"}
-        assert client.is_vlm is True
+        assert client.thinking_enabled is True
+        assert client.reasoning_effort == "high"
+        assert client.extra_body == {"vendor": {"flag": True}}
 
     @pytest.mark.asyncio
     async def test_chat_builds_tool_request(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, capture_llm_request: dict[str, Any]
     ) -> None:
-        captured: dict[str, Any] = {}
-
-        async def fake_acompletion(**kwargs):
-            captured.update(kwargs)
-            return make_response(content="ok")
-
-        monkeypatch.setattr(
-            "paper_plane_x_backend.core.agent_runtime.llm_client.acompletion",
-            fake_acompletion,
-        )
-
         client = LLMClient(model="m", api_key="k")
         tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
 
@@ -327,25 +358,14 @@ class TestLLMClientExtended:
         )
 
         assert resp.content == "ok"
-        assert captured["tools"] == tools
-        assert captured["tool_choice"] == "auto"
-        assert captured["api_key"] == "k"
+        assert capture_llm_request["tools"] == tools
+        assert capture_llm_request["tool_choice"] == "auto"
+        assert capture_llm_request["api_key"] == "k"
 
     @pytest.mark.asyncio
     async def test_chat_builds_structured_request(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, capture_llm_request: dict[str, Any]
     ) -> None:
-        captured: dict[str, Any] = {}
-
-        async def fake_acompletion(**kwargs):
-            captured.update(kwargs)
-            return make_response(content='{"value":"v"}')
-
-        monkeypatch.setattr(
-            "paper_plane_x_backend.core.agent_runtime.llm_client.acompletion",
-            fake_acompletion,
-        )
-
         client = LLMClient(model="m")
         await client.chat(
             messages=[{"role": "user", "content": "hi"}],
@@ -353,46 +373,100 @@ class TestLLMClientExtended:
             temperature=0.33,
         )
 
-        assert captured["response_format"]["type"] == "json_object"
-        assert "schema" in captured["response_format"]
-        assert captured["temperature"] == 0.33
+        assert capture_llm_request["response_format"]["type"] == "json_object"
+        assert "schema" in capture_llm_request["response_format"]
+        assert capture_llm_request["temperature"] == 0.33
 
     @pytest.mark.asyncio
     async def test_chat_infers_openai_provider_for_base_url(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, capture_llm_request: dict[str, Any]
     ) -> None:
-        captured: dict[str, Any] = {}
-
-        async def fake_acompletion(**kwargs):
-            captured.update(kwargs)
-            return make_response(content="ok")
-
-        monkeypatch.setattr(
-            "paper_plane_x_backend.core.agent_runtime.llm_client.acompletion",
-            fake_acompletion,
-        )
-
         client = LLMClient(model="deepseek-chat", base_url="https://example.com/v1")
         await client.chat(messages=[{"role": "user", "content": "hi"}])
 
-        assert captured["model"] == "deepseek-chat"
-        assert captured["custom_llm_provider"] == "openai"
+        assert capture_llm_request["model"] == "deepseek-chat"
+        assert capture_llm_request["custom_llm_provider"] == "openai"
 
-    def test_parse_response_with_tool_calls(self) -> None:
+    @pytest.mark.asyncio
+    async def test_chat_builds_reasoning_request(
+        self, capture_llm_request: dict[str, Any]
+    ) -> None:
+        client = LLMClient(
+            model="deepseek-chat",
+            thinking_enabled=True,
+            reasoning_effort="high",
+            extra_body={"metadata": {"source": "config"}},
+        )
+        await client.chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert capture_llm_request["reasoning_effort"] == "high"
+        assert capture_llm_request["allowed_openai_params"] == ["reasoning_effort"]
+        assert capture_llm_request["extra_body"] == {
+            "thinking": {"type": "enabled"},
+            "metadata": {"source": "config"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_chat_allows_extra_body_override(
+        self, capture_llm_request: dict[str, Any]
+    ) -> None:
+        client = LLMClient(
+            model="deepseek-chat",
+            thinking_enabled=True,
+            reasoning_effort="medium",
+        )
+        await client.chat(
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="low",
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+
+        assert capture_llm_request["reasoning_effort"] == "low"
+        assert capture_llm_request["allowed_openai_params"] == ["reasoning_effort"]
+        assert capture_llm_request["extra_body"] == {"thinking": {"type": "disabled"}}
+
+    @pytest.mark.asyncio
+    async def test_chat_omits_reasoning_fields_by_default(
+        self, capture_llm_request: dict[str, Any]
+    ) -> None:
+        client = LLMClient(model="m")
+        await client.chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert "extra_body" not in capture_llm_request
+        assert "reasoning_effort" not in capture_llm_request
+
+    def test_parse_response_with_tool_calls(self, make_litellm_response) -> None:
         client = LLMClient(model="m")
         tc = SimpleNamespace(
             id="id1",
             type="function",
             function=SimpleNamespace(name="sum", arguments='{"a":1}'),
         )
-        raw = make_response(content=None, tool_calls=[tc], usage={"total_tokens": 5})
+        raw = make_litellm_response(
+            content=None,
+            reasoning_content="thinking",
+            tool_calls=[tc],
+            usage={"total_tokens": 5},
+        )
 
         parsed = client._parse_response(raw)
 
         assert parsed.content is None
+        assert parsed.reasoning_content == "thinking"
         assert parsed.tool_calls is not None
         assert parsed.tool_calls[0].function.name == "sum"
         assert parsed.usage["total_tokens"] == 5
+
+    def test_parse_response_ignores_non_string_reasoning_content(
+        self, make_litellm_response
+    ) -> None:
+        client = LLMClient(model="m")
+        raw = make_litellm_response(content="ok", reasoning_content={"bad": True})
+
+        parsed = client._parse_response(raw)
+
+        assert parsed.content == "ok"
+        assert parsed.reasoning_content is None
 
     @pytest.mark.asyncio
     async def test_tool_registry_execute_tool_call_returns_tool_message(self) -> None:

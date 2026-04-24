@@ -4,6 +4,7 @@ import asyncio
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -227,6 +228,47 @@ async def test_cleanup_path_is_removed_after_task_finishes(
 
 
 @pytest.mark.asyncio
+async def test_completed_task_copies_trace_ids_from_processor_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _new_in_memory_manager()
+
+    async def fake_run(self, task):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            extraction_trace_ids=["trace-extraction"],
+            analysis_trace_ids=["trace-analysis"],
+            extraction_fact_check_trace_ids=["trace-extraction-fc"],
+            analysis_fact_check_trace_ids=["trace-analysis-fc"],
+        )
+
+    monkeypatch.setattr(DataProcessTaskManager, "_run_data_process_task", fake_run)
+
+    await manager.start()
+    state = await manager.submit_task(
+        DataProcessQueueTask(
+            task_id="task-result-traces",
+            paper_id="paper-1",
+            payload={"pdf_path": "/tmp/fake.pdf"},
+        )
+    )
+
+    for _ in range(20):
+        latest = manager.get_task(state.task_id)
+        if latest and latest.status == DataProcessTaskStatus.COMPLETED:
+            break
+        await asyncio.sleep(0.01)
+
+    latest = manager.get_task(state.task_id)
+    assert latest is not None
+    assert latest.extraction_trace_ids == ["trace-extraction"]
+    assert latest.analysis_trace_ids == ["trace-analysis"]
+    assert latest.extraction_fact_check_trace_ids == ["trace-extraction-fc"]
+    assert latest.analysis_fact_check_trace_ids == ["trace-analysis-fc"]
+
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_cancel_already_canceled_task_raises_value_error() -> None:
     """验证重复取消已结束任务会报冲突。"""
     manager = _new_in_memory_manager()
@@ -289,3 +331,27 @@ async def test_start_recovers_queued_tasks_from_database(
     assert latest.status == DataProcessTaskStatus.COMPLETED
 
     await manager.stop()
+
+
+def test_sqlite_task_state_store_round_trips_trace_ids(db) -> None:
+    store = SQLiteDataProcessTaskStateStore(db)
+    state = DataProcessTaskState(
+        task_id="task-traces",
+        paper_id="paper-traces",
+        payload={"pdf_path": "/tmp/fake.pdf"},
+        status=DataProcessTaskStatus.COMPLETED,
+        created_at=datetime.now(),
+        extraction_trace_ids=["trace-extraction"],
+        analysis_trace_ids=["trace-analysis"],
+        extraction_fact_check_trace_ids=["trace-extraction-fc"],
+        analysis_fact_check_trace_ids=["trace-analysis-fc"],
+    )
+
+    store.upsert(state)
+
+    loaded = store.get("task-traces")
+    assert loaded is not None
+    assert loaded.extraction_trace_ids == ["trace-extraction"]
+    assert loaded.analysis_trace_ids == ["trace-analysis"]
+    assert loaded.extraction_fact_check_trace_ids == ["trace-extraction-fc"]
+    assert loaded.analysis_fact_check_trace_ids == ["trace-analysis-fc"]

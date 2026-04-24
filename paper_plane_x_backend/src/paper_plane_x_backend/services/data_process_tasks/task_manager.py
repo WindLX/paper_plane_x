@@ -19,7 +19,11 @@ from paper_plane_x_backend.services.data_process_tasks.stores import (
 )
 from paper_plane_x_backend.services.database import get_db
 from paper_plane_x_backend.services.paper.parser import PaperParser
-from paper_plane_x_backend.services.paper.processor import PaperProcessor
+from paper_plane_x_backend.services.paper.processor import (
+    PaperProcessor,
+    PaperProcessorError,
+    PaperProcessResult,
+)
 from paper_plane_x_backend.services.paper.repository import PaperRepository
 
 logger = logging.getLogger(__name__)
@@ -298,7 +302,8 @@ class DataProcessTaskManager:
             try:
                 job = asyncio.create_task(self._run_data_process_task(task))
                 self._running_jobs[task.task_id] = job
-                await asyncio.wait_for(job, timeout=self._task_max_seconds)
+                result = await asyncio.wait_for(job, timeout=self._task_max_seconds)
+                self._sync_trace_ids_from_result(state, result)
                 state.status = DataProcessTaskStatus.COMPLETED
                 state.finished_at = datetime.now()
                 logger.info(
@@ -328,6 +333,15 @@ class DataProcessTaskManager:
                     task.task_id,
                 )
             except Exception as exc:
+                if isinstance(exc, PaperProcessorError):
+                    state.extraction_trace_ids = list(exc.extraction_trace_ids)
+                    state.analysis_trace_ids = list(exc.analysis_trace_ids)
+                    state.extraction_fact_check_trace_ids = list(
+                        exc.extraction_fact_check_trace_ids
+                    )
+                    state.analysis_fact_check_trace_ids = list(
+                        exc.analysis_fact_check_trace_ids
+                    )
                 state.status = DataProcessTaskStatus.FAILED
                 state.error = str(exc)
                 state.finished_at = datetime.now()
@@ -353,7 +367,22 @@ class DataProcessTaskManager:
                         )
                 self._queue.task_done()
 
-    async def _run_data_process_task(self, task: DataProcessQueueTask) -> None:
+    @staticmethod
+    def _sync_trace_ids_from_result(
+        state: DataProcessTaskState, result: PaperProcessResult | object
+    ) -> None:
+        state.extraction_trace_ids = list(getattr(result, "extraction_trace_ids", []))
+        state.analysis_trace_ids = list(getattr(result, "analysis_trace_ids", []))
+        state.extraction_fact_check_trace_ids = list(
+            getattr(result, "extraction_fact_check_trace_ids", [])
+        )
+        state.analysis_fact_check_trace_ids = list(
+            getattr(result, "analysis_fact_check_trace_ids", [])
+        )
+
+    async def _run_data_process_task(
+        self, task: DataProcessQueueTask
+    ) -> PaperProcessResult:
         """执行单个 data-process 任务。"""
         paper_id = task.paper_id
         pdf_path = task.payload.get("pdf_path")
@@ -369,7 +398,7 @@ class DataProcessTaskManager:
         )
         repo = PaperRepository(get_db())
         processor = PaperProcessor(repo=repo, parser=PaperParser())
-        await processor.process(
+        return await processor.process(
             paper_id=paper_id,
             pdf_path=Path(pdf_path),
             max_retries=settings.data_process.max_retries,

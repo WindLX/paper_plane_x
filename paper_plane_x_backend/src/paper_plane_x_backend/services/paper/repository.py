@@ -527,10 +527,8 @@ class PaperRepository:
             analysis_report=None,
             extraction_fact_check_status=FactCheckStatus.PENDING,
             extraction_fact_check_result=None,
-            extraction_final_fact_check_trace_id=None,
             analysis_fact_check_status=FactCheckStatus.PENDING,
             analysis_fact_check_result=None,
-            analysis_final_fact_check_trace_id=None,
             extraction_retry_count=0,
             analysis_retry_count=0,
             created_at=now,
@@ -658,15 +656,11 @@ class PaperRepository:
         paper_id: str,
         status: ExtractionStatus,
         error_message: str | None = None,
-        extraction_final_fact_check_trace_id: str | None = None,
-        analysis_final_fact_check_trace_id: str | None = None,
     ) -> None:
         """更新 Paper 状态."""
         update_data: dict[str, object] = {
             "extraction_status": status,
             "updated_at": datetime.now(),
-            "extraction_final_fact_check_trace_id": extraction_final_fact_check_trace_id,
-            "analysis_final_fact_check_trace_id": analysis_final_fact_check_trace_id,
         }
         if status == ExtractionStatus.FAILED and error_message:
             failure_payload = json.dumps(

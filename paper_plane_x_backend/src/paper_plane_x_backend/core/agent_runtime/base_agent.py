@@ -57,7 +57,7 @@ class BaseAgent:
         self.max_steps = max_steps
         self.save_trace = save_trace
         self.agent_name = agent_name or self.__class__.__name__
-        self.last_trace_id: str | None = None
+        self.trace_ids: list[str] = []
 
         self.tool_registry = ToolRegistry()
         if tools:
@@ -242,7 +242,7 @@ class BaseAgent:
         try:
             direct_loaded = json.loads(content)
             if not isinstance(direct_loaded, dict):
-                original_error = AgentValidationError(
+                raise AgentValidationError(
                     message="Invalid JSON output: root type must be JSON object",
                     agent_name=self.agent_name,
                     raw_output=content,
@@ -337,8 +337,6 @@ class BaseAgent:
 
     def _save_trace(
         self,
-        latest_input_message: dict[str, Any] | None,
-        output: str,
         messages: list[dict[str, Any]],
         *,
         llm_model: str | None = None,
@@ -351,9 +349,7 @@ class BaseAgent:
             trace = AgentTrace(
                 trace_id=trace_id,
                 agent_name=self.agent_name,
-                latest_input_message=latest_input_message,
-                output_message=output,
-                message_history=messages,
+                messages=messages,
                 llm_model=llm_model,
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
@@ -362,7 +358,7 @@ class BaseAgent:
                 created_at=datetime.now(),
             )
             db.insert("agent_traces", trace.to_db_dict())
-            self.last_trace_id = trace_id
+            self.trace_ids.append(trace_id)
         except Exception as e:
             logger.warning(
                 "event=agent.trace_save_failed agent=%s error=%s",
@@ -382,9 +378,11 @@ class BaseAgent:
             )
         output_schema = self._get_output_schema()
         last_validation_error: AgentValidationError | None = None
+        validated_output = None
 
         for step in range(self.max_steps):
             content = ""
+            reasoning_content = None
             try:
                 logger.debug(
                     "event=agent.step_started agent=%s mode=api step=%s max_steps=%s",
@@ -397,10 +395,15 @@ class BaseAgent:
                     output_schema=output_schema,
                 )
                 content = response.content or ""
+                reasoning_content = response.reasoning_content
+                self.memory.append_assistant_message(
+                    content=content,
+                    name=self.agent_name,
+                    reasoning_content=reasoning_content,
+                )
+
                 if self.save_trace:
                     self._save_trace(
-                        latest_input_message=self.memory.get_latest_message(),
-                        output=content,
                         messages=self.memory.dump_messages(),
                         llm_model=response.model,
                         usage=response.usage,
@@ -408,16 +411,12 @@ class BaseAgent:
 
                 validated_output = self._validate_output(content)
 
-                self.memory.append_assistant_message(
-                    content=content, name=self.agent_name
-                )
-
                 logger.info(
                     "event=agent.run_completed agent=%s mode=api step=%s",
                     self.agent_name,
                     step + 1,
                 )
-                return validated_output
+                break
             except AgentValidationError as e:
                 last_validation_error = e
                 logger.warning(
@@ -427,10 +426,6 @@ class BaseAgent:
                     self.max_steps,
                     e.message,
                 )
-                if content:
-                    self.memory.append_assistant_message(
-                        content=content, name=self.agent_name
-                    )
 
                 error_detail = e.validation_errors if e.validation_errors else e.message
                 self.memory.append_validation_feedback(error_detail)
@@ -452,6 +447,9 @@ class BaseAgent:
                     message=f"API mode execution failed: {e}",
                     agent_name=self.agent_name,
                 ) from e
+
+        if validated_output is not None:
+            return validated_output
 
         if last_validation_error is not None:
             raise last_validation_error
@@ -476,16 +474,20 @@ class BaseAgent:
         if len(self.tool_registry) == 0:
             response = await self.llm.generate(self.memory.get_messages())
             content = response.content or ""
+            reasoning_content = response.reasoning_content
+
+            self.memory.append_assistant_message(
+                content=content,
+                name=self.agent_name,
+                reasoning_content=reasoning_content,
+            )
+
             if self.save_trace:
                 self._save_trace(
-                    latest_input_message=self.memory.get_latest_message(),
-                    output=content,
                     messages=self.memory.dump_messages(),
                     llm_model=response.model,
                     usage=response.usage,
                 )
-
-            self.memory.append_assistant_message(content=content, name=self.agent_name)
 
             logger.info(
                 "event=agent.run_completed agent=%s mode=normal step=1",
@@ -507,20 +509,20 @@ class BaseAgent:
                     response = await self.llm.generate_with_tools(messages, tools)
                 else:
                     response = await self.llm.generate(messages)
-                if self.save_trace:
-                    self._save_trace(
-                        latest_input_message=self.memory.get_latest_message(),
-                        output=response.content or "",
-                        messages=self.memory.dump_messages(),
-                        llm_model=response.model,
-                        usage=response.usage,
-                    )
 
                 self.memory.append_assistant_message(
                     content=response.content,
                     name=self.agent_name,
                     tool_calls=response.tool_calls or None,
+                    reasoning_content=response.reasoning_content,
                 )
+
+                if self.save_trace:
+                    self._save_trace(
+                        messages=self.memory.dump_messages(),
+                        llm_model=response.model,
+                        usage=response.usage,
+                    )
 
                 if response.tool_calls:
                     logger.debug(
@@ -570,7 +572,7 @@ class BaseAgent:
         )
 
     async def run(self) -> BaseModel | str:
-        self.last_trace_id = None
+        self.trace_ids = []
         if self.mode == "api":
             return await self._run_api()
         return await self._run_normal()

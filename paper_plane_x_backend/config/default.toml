@@ -27,29 +27,39 @@ shutdown_timeout = 5.0
 task_max_seconds = 600.0
 
 [llm]
-model = "deepseek-chat"
+model = "deepseek-v4-flash"
 base_url = "https://api.deepseek.com/v1"
 # pass api_key via env: PPX_LLM__API_KEY=sk-...
 api_key = ""
 temperature = 0.7
 max_tokens = 8192
 timeout = 180.0
+thinking_enabled = false
+# reasoning_effort = "high" # high/max for deepseek thinking mode
 is_vlm = false
 
+# Advanced vendor-specific request body passthrough.
+# For DeepSeek thinking mode, setting thinking_enabled = true maps to:
+# [llm.extra_body.thinking]
+# type = "enabled"
 [agent_llm.extraction]
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
+model = "deepseek-v4-flash"
+thinking_enabled = true
+reasoning_effort = "high"
 temperature = 0.3
 max_tokens = 8192
 
 [agent_llm.analysis]
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
+model = "deepseek-v4-flash"
+thinking_enabled = true
+reasoning_effort = "high"
 temperature = 0.3
 max_tokens = 8192
 
 [agent_llm.fact_check]
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
+model = "deepseek-v4-flash"
 temperature = 0.1
 max_tokens = 8192

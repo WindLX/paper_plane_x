@@ -1,6 +1,6 @@
 """Data process task models."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,3 +28,7 @@ class DataProcessTaskState:
     finished_at: datetime | None = None
     error: str | None = None
     retry_of_task_id: str | None = None
+    extraction_trace_ids: list[str] = field(default_factory=list)
+    analysis_trace_ids: list[str] = field(default_factory=list)
+    extraction_fact_check_trace_ids: list[str] = field(default_factory=list)
+    analysis_fact_check_trace_ids: list[str] = field(default_factory=list)

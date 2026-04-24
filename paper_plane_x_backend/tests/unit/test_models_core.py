@@ -30,7 +30,6 @@ def test_paper_from_db_row_parses_enums_and_json_fields() -> None:
         "synthesis_data": json.dumps({"s": 2}, ensure_ascii=False),
         "fact_check_status": "PASSED",
         "fact_check_result": json.dumps({"ok": True}, ensure_ascii=False),
-        "final_fact_check_trace_id": "trace-1",
         "extraction_retry_count": 1,
         "created_at": now,
         "updated_at": now,
@@ -45,7 +44,6 @@ def test_paper_from_db_row_parses_enums_and_json_fields() -> None:
     assert paper.quick_scan == {"k": 1}
     assert paper.synthesis_data == {"s": 2}
     assert paper.extraction_fact_check_result == {"ok": True}
-    assert paper.extraction_final_fact_check_trace_id == "trace-1"
     assert paper.analysis_fact_check_status == FactCheckStatus.PENDING
     assert paper.raw_pdf_sha256 == "hash-1"
 
@@ -69,7 +67,6 @@ def test_paper_from_db_row_fills_empty_list_defaults() -> None:
         "synthesis_data": None,
         "fact_check_status": "PENDING",
         "fact_check_result": None,
-        "final_fact_check_trace_id": None,
         "extraction_retry_count": 0,
         "created_at": now,
         "updated_at": now,
@@ -85,9 +82,7 @@ def test_agent_trace_to_db_dict_serializes_json_fields() -> None:
     trace = AgentTrace(
         trace_id="t1",
         agent_name="A",
-        latest_input_message={"role": "user", "content": "x"},
-        output_message="ok",
-        message_history=[{"role": "user", "content": "x"}],
+        messages=[{"role": "user", "content": "x"}],
         llm_model="m",
         prompt_tokens=1,
         completion_tokens=2,
@@ -98,8 +93,6 @@ def test_agent_trace_to_db_dict_serializes_json_fields() -> None:
 
     payload = trace.to_db_dict()
 
-    assert isinstance(payload["latest_input_message"], str)
-    assert isinstance(payload["output_message"], str)
-    assert isinstance(payload["message_history"], str)
+    assert isinstance(payload["messages"], str)
     assert isinstance(payload["usage_payload"], str)
     assert json.loads(payload["usage_payload"]) == {"cache_hit": False}

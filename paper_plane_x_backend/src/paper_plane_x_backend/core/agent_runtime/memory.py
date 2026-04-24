@@ -59,12 +59,6 @@ class MemoryManager:
         """判断当前会话是否存在指定 role 的消息。"""
         return any(message.get("role") == role for message in self._messages)
 
-    def get_latest_message(self) -> dict[str, Any] | None:
-        """获取当前会话中的最新一条消息。"""
-        if not self._messages:
-            return None
-        return dict(self._messages[-1])
-
     def dump_messages(self) -> list[dict[str, Any]]:
         """导出会话消息（用于 trace 持久化）。"""
         return list(self.get_messages())
@@ -116,11 +110,15 @@ class MemoryManager:
         content: str | None,
         name: str | None = None,
         tool_calls: list[ToolCallMessage] | None = None,
+        reasoning_content: str | None = None,
     ) -> None:
         """追加 assistant 消息。"""
         self._messages.append(
             AssistantMessage(
-                content=content, name=name, tool_calls=tool_calls
+                content=(f"[{name}] {content}" if name else content),
+                reasoning_content=reasoning_content,
+                name=name,
+                tool_calls=tool_calls,
             ).model_dump(exclude_none=True)
         )
 
@@ -196,12 +194,14 @@ class MemoryManager:
         self,
         content: str | None,
         tool_calls: list[ToolCallMessage] | None = None,
+        reasoning_content: str | None = None,
         occurrence_from_end: int = 1,
     ) -> None:
         """修改最近第 N 条 assistant 消息。"""
         index = self._find_message_index_by_role("assistant", occurrence_from_end)
         self._messages[index] = AssistantMessage(
             content=content,
+            reasoning_content=reasoning_content,
             tool_calls=tool_calls,
         ).model_dump(exclude_none=True)
 

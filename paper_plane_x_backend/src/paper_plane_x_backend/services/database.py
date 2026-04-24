@@ -3,6 +3,7 @@
 不使用 ORM，直接使用 sqlite3 模块进行数据库操作。
 """
 
+import json
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -55,10 +56,8 @@ CREATE TABLE IF NOT EXISTS papers (
     analysis_report TEXT,
     extraction_fact_check_status TEXT DEFAULT 'PENDING',
     extraction_fact_check_result TEXT,
-    extraction_final_fact_check_trace_id TEXT,
     analysis_fact_check_status TEXT DEFAULT 'PENDING',
     analysis_fact_check_result TEXT,
-    analysis_final_fact_check_trace_id TEXT,
     extraction_retry_count INTEGER DEFAULT 0,
     analysis_retry_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -77,9 +76,7 @@ CREATE TABLE IF NOT EXISTS paper_projects (
 CREATE TABLE IF NOT EXISTS agent_traces (
     trace_id TEXT PRIMARY KEY,
     agent_name TEXT NOT NULL,
-    latest_input_message TEXT,
-    output_message TEXT,
-    message_history TEXT,
+    messages TEXT,
     llm_model TEXT,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
@@ -97,7 +94,11 @@ CREATE TABLE IF NOT EXISTS data_process_tasks (
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
     error TEXT,
-    retry_of_task_id TEXT
+    retry_of_task_id TEXT,
+    extraction_trace_ids TEXT,
+    analysis_trace_ids TEXT,
+    extraction_fact_check_trace_ids TEXT,
+    analysis_fact_check_trace_ids TEXT
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
@@ -106,25 +107,26 @@ CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
     md_content,
     quick_scan,
     synthesis_data,
+    analysis_report,
     content='papers',
     content_rowid='rowid'
 );
 
 CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
-    INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data)
-    VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data);
+    INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+    VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data, NEW.analysis_report);
 END;
 
 CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
-    INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data)
-    VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data);
+    INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+    VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data, OLD.analysis_report);
 END;
 
 CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
-    INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data)
-    VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data);
-    INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data)
-    VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data);
+    INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+    VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data, OLD.analysis_report);
+    INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+    VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data, NEW.analysis_report);
 END;
 """
 
@@ -172,6 +174,8 @@ class Database:
                 "fact_check_status",
                 "fact_check_result",
                 "final_fact_check_trace_id",
+                "extraction_final_fact_check_trace_id",
+                "analysis_final_fact_check_trace_id",
             ]
         )
         new_columns_ready = all(
@@ -180,11 +184,36 @@ class Database:
                 "analysis_report",
                 "extraction_fact_check_status",
                 "extraction_fact_check_result",
-                "extraction_final_fact_check_trace_id",
                 "analysis_fact_check_status",
                 "analysis_fact_check_result",
-                "analysis_final_fact_check_trace_id",
                 "analysis_retry_count",
+            ]
+        )
+        task_trace_columns_ready = all(
+            self._has_column(conn, "data_process_tasks", column)
+            for column in [
+                "extraction_trace_ids",
+                "analysis_trace_ids",
+                "extraction_fact_check_trace_ids",
+                "analysis_fact_check_trace_ids",
+            ]
+        )
+        agent_traces_legacy = any(
+            self._has_column(conn, "agent_traces", col)
+            for col in [
+                "latest_input_message",
+                "output_message",
+                "reasoning_content",
+                "message_history",
+            ]
+        )
+        papers_trace_legacy = any(
+            self._has_column(conn, "papers", col)
+            for col in [
+                "extraction_trace_ids",
+                "extraction_fact_check_trace_ids",
+                "analysis_trace_ids",
+                "analysis_fact_check_trace_ids",
             ]
         )
         return (
@@ -193,6 +222,9 @@ class Database:
             or (not custom_meta_exists)
             or legacy_fact_check_exists
             or (not new_columns_ready)
+            or (not task_trace_columns_ready)
+            or agent_traces_legacy
+            or papers_trace_legacy
         )
 
     def _backup_database_before_migration(self, conn: sqlite3.Connection) -> None:
@@ -239,24 +271,94 @@ class Database:
             )
             conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
 
-    def _rebuild_papers_fts(self, conn: sqlite3.Connection) -> None:
+    def _drop_papers_fts_objects(self, conn: sqlite3.Connection) -> None:
+        for trigger_name in ["papers_ai", "papers_ad", "papers_au"]:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
         conn.execute("DROP TABLE IF EXISTS papers_fts")
-        conn.execute(
-            "CREATE VIRTUAL TABLE papers_fts USING fts5("
-            "paper_id, title, md_content, quick_scan, synthesis_data, "
-            "content='papers', content_rowid='rowid')"
+
+    def _ensure_papers_fts_objects(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+                paper_id,
+                title,
+                md_content,
+                quick_scan,
+                synthesis_data,
+                analysis_report,
+                content='papers',
+                content_rowid='rowid'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
+                INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+                VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data, NEW.analysis_report);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
+                INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+                VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data, OLD.analysis_report);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
+                INSERT INTO papers_fts(papers_fts, rowid, paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+                VALUES ('delete', OLD.rowid, OLD.paper_id, OLD.title, OLD.md_content, OLD.quick_scan, OLD.synthesis_data, OLD.analysis_report);
+                INSERT INTO papers_fts(paper_id, title, md_content, quick_scan, synthesis_data, analysis_report)
+                VALUES (NEW.paper_id, NEW.title, NEW.md_content, NEW.quick_scan, NEW.synthesis_data, NEW.analysis_report);
+            END;
+            """
         )
-        conn.execute(
-            "INSERT INTO papers_fts(rowid, paper_id, title, md_content, quick_scan, synthesis_data) "
-            "SELECT rowid, paper_id, title, md_content, quick_scan, synthesis_data FROM papers"
-        )
+
+    def _rebuild_papers_fts(self, conn: sqlite3.Connection) -> None:
+        self._drop_papers_fts_objects(conn)
+        self._ensure_papers_fts_objects(conn)
+        conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
         logger.info("event=database.fts_rebuilt")
 
+    @staticmethod
+    def _is_fts_recoverable_error(sql: str, exc: sqlite3.DatabaseError) -> bool:
+        message = str(exc).lower()
+        if "fts5" in message or "papers_fts" in message:
+            return True
+        if "database disk image is malformed" in message and "papers" in sql.lower():
+            return True
+        if "malformed" in message and "virtual table" in message:
+            return True
+        return "corrupt" in message and "fts" in message
+
+    def _execute_with_fts_recovery(
+        self,
+        conn: sqlite3.Connection,
+        sql: str,
+        parameters: tuple[Any, ...] | dict[str, Any] = (),
+    ) -> sqlite3.Cursor:
+        try:
+            return conn.execute(sql, parameters)
+        except sqlite3.DatabaseError as exc:
+            if not self._is_fts_recoverable_error(sql, exc):
+                raise
+            logger.warning(
+                "event=database.fts_runtime_recovery_triggered error=%s",
+                exc,
+            )
+            self._rebuild_papers_fts(conn)
+            return conn.execute(sql, parameters)
+
     def _ensure_schema_migrations(self, conn: sqlite3.Connection) -> None:
+        self._drop_papers_fts_objects(conn)
         venue_exists = self._has_column(conn, "papers", "venue")
         publication_exists = self._has_column(conn, "papers", "publication")
         if not publication_exists:
             self._ensure_column(conn, "papers", "publication", "TEXT")
+
+        for fts_column in [
+            "title",
+            "md_content",
+            "quick_scan",
+            "synthesis_data",
+            "analysis_report",
+        ]:
+            self._ensure_column(conn, "papers", fts_column, "TEXT")
 
         if venue_exists:
             conn.execute(
@@ -286,37 +388,40 @@ class Database:
         self._ensure_column(
             conn,
             "papers",
-            "extraction_final_fact_check_trace_id",
-            "TEXT",
-        )
-        self._ensure_column(
-            conn,
-            "papers",
             "analysis_fact_check_status",
             "TEXT DEFAULT 'PENDING'",
         )
         self._ensure_column(conn, "papers", "analysis_fact_check_result", "TEXT")
-        self._ensure_column(
-            conn,
-            "papers",
-            "analysis_final_fact_check_trace_id",
-            "TEXT",
-        )
         self._ensure_column(conn, "papers", "analysis_retry_count", "INTEGER DEFAULT 0")
         self._migrate_legacy_fact_check_columns(conn)
+        self._drop_papers_trace_columns(conn)
         self._ensure_column(conn, "papers", "raw_pdf_sha256", "TEXT")
+        self._migrate_agent_traces_messages_schema(conn)
         self._ensure_column(conn, "agent_traces", "llm_model", "TEXT")
         self._ensure_column(conn, "agent_traces", "prompt_tokens", "INTEGER")
         self._ensure_column(conn, "agent_traces", "completion_tokens", "INTEGER")
         self._ensure_column(conn, "agent_traces", "total_tokens", "INTEGER")
         self._ensure_column(conn, "agent_traces", "usage_payload", "TEXT")
+        self._ensure_trace_columns(conn, "data_process_tasks")
         conn.execute("DROP TABLE IF EXISTS data_process_history")
+        self._ensure_papers_fts_objects(conn)
+
+    def _ensure_trace_columns(self, conn: sqlite3.Connection, table: str) -> None:
+        for column in [
+            "extraction_trace_ids",
+            "analysis_trace_ids",
+            "extraction_fact_check_trace_ids",
+            "analysis_fact_check_trace_ids",
+        ]:
+            self._ensure_column(conn, table, column, "TEXT")
 
     def _migrate_legacy_fact_check_columns(self, conn: sqlite3.Connection) -> None:
         legacy_columns = [
             "fact_check_status",
             "fact_check_result",
             "final_fact_check_trace_id",
+            "extraction_final_fact_check_trace_id",
+            "analysis_final_fact_check_trace_id",
         ]
         if not any(
             self._has_column(conn, "papers", column) for column in legacy_columns
@@ -328,8 +433,7 @@ class Database:
                 """
                 UPDATE papers
                 SET extraction_fact_check_status = fact_check_status
-                WHERE (extraction_fact_check_status IS NULL OR extraction_fact_check_status = '')
-                  AND fact_check_status IS NOT NULL
+                WHERE fact_check_status IS NOT NULL
                 """
             )
         if self._has_column(conn, "papers", "fact_check_result"):
@@ -337,20 +441,9 @@ class Database:
                 """
                 UPDATE papers
                 SET extraction_fact_check_result = fact_check_result
-                WHERE extraction_fact_check_result IS NULL
-                  AND fact_check_result IS NOT NULL
+                WHERE fact_check_result IS NOT NULL
                 """
             )
-        if self._has_column(conn, "papers", "final_fact_check_trace_id"):
-            conn.execute(
-                """
-                UPDATE papers
-                SET extraction_final_fact_check_trace_id = final_fact_check_trace_id
-                WHERE extraction_final_fact_check_trace_id IS NULL
-                  AND final_fact_check_trace_id IS NOT NULL
-                """
-            )
-
         for legacy_column in legacy_columns:
             if not self._has_column(conn, "papers", legacy_column):
                 continue
@@ -362,6 +455,90 @@ class Database:
                     legacy_column,
                     exc,
                 )
+
+    def _drop_papers_trace_columns(self, conn: sqlite3.Connection) -> None:
+        for column in [
+            "extraction_trace_ids",
+            "extraction_fact_check_trace_ids",
+            "analysis_trace_ids",
+            "analysis_fact_check_trace_ids",
+        ]:
+            if self._has_column(conn, "papers", column):
+                try:
+                    conn.execute(f"ALTER TABLE papers DROP COLUMN {column}")
+                except sqlite3.OperationalError as exc:
+                    logger.warning(
+                        "event=database.drop_legacy_column_skipped table=papers column=%s error=%s",
+                        column,
+                        exc,
+                    )
+
+    def _migrate_agent_traces_messages_schema(self, conn: sqlite3.Connection) -> None:
+        """迁移 agent_traces 旧字段到 messages 字段。
+
+        删除 latest_input_message / output_message / reasoning_content，
+        将 message_history 与 output_message 合并后写入 messages，
+        最后删除 message_history。
+        """
+        legacy_columns = [
+            "latest_input_message",
+            "output_message",
+            "reasoning_content",
+            "message_history",
+        ]
+        if not any(
+            self._has_column(conn, "agent_traces", col) for col in legacy_columns
+        ):
+            self._ensure_column(conn, "agent_traces", "messages", "TEXT")
+            return
+
+        self._ensure_column(conn, "agent_traces", "messages", "TEXT")
+
+        has_output_message = self._has_column(conn, "agent_traces", "output_message")
+        has_message_history = self._has_column(conn, "agent_traces", "message_history")
+
+        if has_output_message or has_message_history:
+            rows = conn.execute(
+                "SELECT trace_id, agent_name, output_message, message_history FROM agent_traces"
+            ).fetchall()
+            for row in rows:
+                trace_id = row["trace_id"]
+                agent_name = row["agent_name"] or "UnknownAgent"
+                output_msg = row["output_message"] or ""
+                history_str = row["message_history"] or "[]"
+
+                try:
+                    messages: list[dict[str, Any]] = json.loads(history_str)
+                    if not isinstance(messages, list):
+                        messages = []
+                except (json.JSONDecodeError, TypeError):
+                    messages = []
+
+                if output_msg:
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": output_msg,
+                            "name": agent_name,
+                        }
+                    )
+
+                if messages:
+                    conn.execute(
+                        "UPDATE agent_traces SET messages = ? WHERE trace_id = ?",
+                        (json.dumps(messages, ensure_ascii=False), trace_id),
+                    )
+
+        for col in legacy_columns:
+            if self._has_column(conn, "agent_traces", col):
+                try:
+                    conn.execute(f"ALTER TABLE agent_traces DROP COLUMN {col}")
+                except sqlite3.OperationalError as exc:
+                    logger.warning(
+                        "event=database.drop_legacy_column_skipped table=agent_traces column=%s error=%s",
+                        col,
+                        exc,
+                    )
 
     @staticmethod
     def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -386,7 +563,7 @@ class Database:
         parameters: tuple[Any, ...] | dict[str, Any] = (),
     ) -> sqlite3.Cursor:
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, parameters)
+            cursor = self._execute_with_fts_recovery(conn, sql, parameters)
             conn.commit()
             return cursor
 
@@ -396,7 +573,7 @@ class Database:
         parameters: tuple[Any, ...] | dict[str, Any] = (),
     ) -> dict[str, Any] | None:
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, parameters)
+            cursor = self._execute_with_fts_recovery(conn, sql, parameters)
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -406,7 +583,7 @@ class Database:
         parameters: tuple[Any, ...] | dict[str, Any] = (),
     ) -> list[dict[str, Any]]:
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, parameters)
+            cursor = self._execute_with_fts_recovery(conn, sql, parameters)
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -420,7 +597,7 @@ class Database:
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
 
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, tuple(data.values()))
+            cursor = self._execute_with_fts_recovery(conn, sql, tuple(data.values()))
             conn.commit()
             return cursor.lastrowid
 
@@ -436,7 +613,7 @@ class Database:
         params = tuple(data.values()) + where_params
 
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, params)
+            cursor = self._execute_with_fts_recovery(conn, sql, params)
             conn.commit()
             return cursor.rowcount
 
@@ -449,7 +626,7 @@ class Database:
         sql = f"DELETE FROM {table} WHERE {where}"
 
         with self.get_connection() as conn:
-            cursor = conn.execute(sql, where_params)
+            cursor = self._execute_with_fts_recovery(conn, sql, where_params)
             conn.commit()
             return cursor.rowcount
 

@@ -124,6 +124,18 @@ class DataProcessTaskResponse(BaseModel):
     finished_at: datetime | None = Field(default=None, description="结束时间")
     error: str | None = Field(default=None, description="失败原因")
     retry_of_task_id: str | None = Field(default=None, description="重试来源任务 ID")
+    extraction_trace_ids: list[str] = Field(
+        default_factory=list, description="ExtractionAgent 所有 trace_id"
+    )
+    analysis_trace_ids: list[str] = Field(
+        default_factory=list, description="AnalysisAgent 所有 trace_id"
+    )
+    extraction_fact_check_trace_ids: list[str] = Field(
+        default_factory=list, description="Extraction 分支 FactCheckAgent 所有 trace_id"
+    )
+    analysis_fact_check_trace_ids: list[str] = Field(
+        default_factory=list, description="Analysis 分支 FactCheckAgent 所有 trace_id"
+    )
 
 
 class DataProcessTaskListResponse(BaseModel):

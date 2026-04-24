@@ -164,10 +164,6 @@ class Paper(BaseModel):
         default=None,
         description="Extraction 分支事实核查结果 (FactCheckAgentOutput 结构)",
     )
-    extraction_final_fact_check_trace_id: str | None = Field(
-        default=None,
-        description="Extraction 分支闭环最终对应的 FactCheckAgent trace_id",
-    )
 
     # 阶段四: Analysis 分支 Fact Check 产物
     analysis_fact_check_status: FactCheckStatus = Field(
@@ -177,10 +173,6 @@ class Paper(BaseModel):
     analysis_fact_check_result: dict[str, Any] | None = Field(
         default=None,
         description="Analysis 分支事实核查结果 (FactCheckAgentOutput 结构)",
-    )
-    analysis_final_fact_check_trace_id: str | None = Field(
-        default=None,
-        description="Analysis 分支闭环最终对应的 FactCheckAgent trace_id",
     )
 
     # 重试计数
@@ -221,13 +213,6 @@ class Paper(BaseModel):
             and data.get("fact_check_result") is not None
         ):
             data["extraction_fact_check_result"] = data["fact_check_result"]
-        if (
-            data.get("extraction_final_fact_check_trace_id") is None
-            and data.get("final_fact_check_trace_id") is not None
-        ):
-            data["extraction_final_fact_check_trace_id"] = data[
-                "final_fact_check_trace_id"
-            ]
 
         if isinstance(data.get("extraction_fact_check_status"), str):
             data["extraction_fact_check_status"] = FactCheckStatus(
@@ -250,12 +235,18 @@ class Paper(BaseModel):
         for field in json_fields:
             if data.get(field) and isinstance(data[field], str):
                 data[field] = json.loads(data[field])
-            elif field in ["authors", "images_paths"] and data.get(field) is None:
-                data[field] = []  # 确保这两个字段至少是空列表
+            elif (
+                field
+                in [
+                    "authors",
+                    "images_paths",
+                ]
+                and data.get(field) is None
+            ):
+                data[field] = []
 
         data.pop("fact_check_status", None)
         data.pop("fact_check_result", None)
-        data.pop("final_fact_check_trace_id", None)
 
         return cls.model_validate(data)
 
@@ -285,11 +276,7 @@ class AgentTrace(BaseModel):
 
     trace_id: str = Field(..., description="唯一标识 (UUID)")
     agent_name: str = Field(..., description="Agent 名称")
-    latest_input_message: dict[str, Any] | None = Field(
-        default=None, description="执行时记忆中的最新消息"
-    )
-    output_message: str | None = Field(default=None, description="执行输出消息")
-    message_history: list[dict[str, Any]] | None = Field(
+    messages: list[dict[str, Any]] | None = Field(
         default=None, description="完整消息历史"
     )
     llm_model: str | None = Field(default=None, description="本次调用的模型标识")
@@ -307,8 +294,7 @@ class AgentTrace(BaseModel):
         data = self.model_dump()
         # 序列化 JSON 字段
         for field in [
-            "latest_input_message",
-            "message_history",
+            "messages",
             "usage_payload",
         ]:
             if data.get(field) is not None:

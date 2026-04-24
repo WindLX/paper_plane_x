@@ -8,7 +8,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -78,8 +78,8 @@ class StructuredDataProcessorAgent(Generic[TOutput]):
         return self._agent.agent_name
 
     @property
-    def last_trace_id(self) -> str | None:
-        return self._agent.last_trace_id
+    def trace_ids(self) -> list[str]:
+        return list(self._agent.trace_ids)
 
     def reset_memory(self) -> None:
         self._agent.memory.reset_memory()
@@ -164,8 +164,16 @@ class DataProcessorAgentGroup:
         self.fact_check_agent1 = fact_check_agent1 or FactCheckAgent()
         self.analysis_agent = analysis_agent or AnalysisAgent()
         self.fact_check_agent2 = fact_check_agent2 or FactCheckAgent()
-        self.extraction_last_fact_check_trace_id: str | None = None
-        self.analysis_last_fact_check_trace_id: str | None = None
+        self.extraction_trace_ids: list[str] = []
+        self.analysis_trace_ids: list[str] = []
+        self.extraction_fact_check_trace_ids: list[str] = []
+        self.analysis_fact_check_trace_ids: list[str] = []
+
+    def reset_trace_ids(self) -> None:
+        self.extraction_trace_ids = []
+        self.analysis_trace_ids = []
+        self.extraction_fact_check_trace_ids = []
+        self.analysis_fact_check_trace_ids = []
 
     async def run_extraction_fact_check_loop(
         self,
@@ -177,7 +185,8 @@ class DataProcessorAgentGroup:
         extraction_result: ExtractionAgentOutput | None = None
         fact_check_result: FactCheckAgentOutput | None = None
         retry_count = 0
-        self.extraction_last_fact_check_trace_id = None
+        self.extraction_trace_ids = []
+        self.extraction_fact_check_trace_ids = []
 
         self.extraction_agent.reset_memory()
         self.fact_check_agent1.reset_memory()
@@ -195,32 +204,23 @@ class DataProcessorAgentGroup:
 
         while retry_count < max_retries:
             extraction_result = await self.extraction_agent.run()
+            self.extraction_trace_ids.extend(self.extraction_agent.trace_ids)
 
             extraction_message = {"extraction_result": extraction_result.model_dump()}
-            self.extraction_agent.append_assistant_message(
-                extraction_message,
-                name=self.extraction_agent.runtime_name,
-            )
             self.fact_check_agent1.append_assistant_message(
                 extraction_message,
                 name=self.extraction_agent.runtime_name,
             )
 
-            fact_check_result_raw: Any = await self.fact_check_agent1.run()
-            if fact_check_result_raw is None:
-                raise RuntimeError("Fact check result is empty after extraction loop")
-            fact_check_result = cast(FactCheckAgentOutput, fact_check_result_raw)
-
-            self.extraction_last_fact_check_trace_id = (
-                self.fact_check_agent1.last_trace_id
+            fact_check_result = await self.fact_check_agent1.run()
+            self.extraction_fact_check_trace_ids.extend(
+                self.fact_check_agent1.trace_ids
             )
+            if fact_check_result is None:
+                raise RuntimeError("Fact check result is empty during fact check loop")
+
             fact_check_message = {"fact_check_result": fact_check_result.model_dump()}
-
             self.extraction_agent.append_assistant_message(
-                fact_check_message,
-                name=self.fact_check_agent1.runtime_name,
-            )
-            self.fact_check_agent1.append_assistant_message(
                 fact_check_message,
                 name=self.fact_check_agent1.runtime_name,
             )
@@ -271,7 +271,8 @@ class DataProcessorAgentGroup:
         analysis_result: AnalysisAgentOutput | None = None
         fact_check_result: FactCheckAgentOutput | None = None
         retry_count = 0
-        self.analysis_last_fact_check_trace_id = None
+        self.analysis_trace_ids = []
+        self.analysis_fact_check_trace_ids = []
 
         self.analysis_agent.reset_memory()
         self.fact_check_agent2.reset_memory()
@@ -287,32 +288,23 @@ class DataProcessorAgentGroup:
 
         while retry_count < max_retries:
             analysis_result = await self.analysis_agent.run()
+            self.analysis_trace_ids.extend(self.analysis_agent.trace_ids)
 
             analysis_message = {"analysis_result": analysis_result.model_dump()}
-            self.analysis_agent.append_assistant_message(
-                analysis_message,
-                name=self.analysis_agent.runtime_name,
-            )
             self.fact_check_agent2.append_assistant_message(
                 analysis_message,
                 name=self.analysis_agent.runtime_name,
             )
 
-            fact_check_result_raw: Any = await self.fact_check_agent2.run()
-            if fact_check_result_raw is None:
-                raise RuntimeError("Fact check result is empty after analysis loop")
-            fact_check_result = cast(FactCheckAgentOutput, fact_check_result_raw)
+            fact_check_result = await self.fact_check_agent2.run()
+            self.analysis_fact_check_trace_ids.extend(self.fact_check_agent2.trace_ids)
+            if fact_check_result is None:
+                raise RuntimeError(
+                    "Fact check result is empty during analysis fact check loop"
+                )
 
-            self.analysis_last_fact_check_trace_id = (
-                self.fact_check_agent2.last_trace_id
-            )
             fact_check_message = {"fact_check_result": fact_check_result.model_dump()}
-
             self.analysis_agent.append_assistant_message(
-                fact_check_message,
-                name=self.fact_check_agent2.runtime_name,
-            )
-            self.fact_check_agent2.append_assistant_message(
                 fact_check_message,
                 name=self.fact_check_agent2.runtime_name,
             )
@@ -369,6 +361,7 @@ class DataProcessorAgentGroup:
         FactCheckAgentOutput,
         int,
     ]:
+        self.reset_trace_ids()
         try:
             extraction_task = self.run_extraction_fact_check_loop(
                 md_content=md_content,

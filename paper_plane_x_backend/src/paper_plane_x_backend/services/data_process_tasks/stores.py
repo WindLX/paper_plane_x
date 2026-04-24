@@ -1,5 +1,6 @@
 """Data process task state stores."""
 
+import builtins
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, MutableMapping
@@ -74,9 +75,11 @@ class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
             """
             INSERT INTO data_process_tasks (
                 task_id, paper_id, payload, status,
-                created_at, started_at, finished_at, error, retry_of_task_id
+                created_at, started_at, finished_at, error, retry_of_task_id,
+                extraction_trace_ids, analysis_trace_ids,
+                extraction_fact_check_trace_ids, analysis_fact_check_trace_ids
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 paper_id=excluded.paper_id,
                 payload=excluded.payload,
@@ -85,7 +88,11 @@ class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
                 started_at=excluded.started_at,
                 finished_at=excluded.finished_at,
                 error=excluded.error,
-                retry_of_task_id=excluded.retry_of_task_id
+                retry_of_task_id=excluded.retry_of_task_id,
+                extraction_trace_ids=excluded.extraction_trace_ids,
+                analysis_trace_ids=excluded.analysis_trace_ids,
+                extraction_fact_check_trace_ids=excluded.extraction_fact_check_trace_ids,
+                analysis_fact_check_trace_ids=excluded.analysis_fact_check_trace_ids
             """,
             (
                 state.task_id,
@@ -97,6 +104,10 @@ class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
                 state.finished_at,
                 state.error,
                 state.retry_of_task_id,
+                json.dumps(state.extraction_trace_ids, ensure_ascii=False),
+                json.dumps(state.analysis_trace_ids, ensure_ascii=False),
+                json.dumps(state.extraction_fact_check_trace_ids, ensure_ascii=False),
+                json.dumps(state.analysis_fact_check_trace_ids, ensure_ascii=False),
             ),
         )
 
@@ -124,6 +135,24 @@ class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
                 (paper_id,),
             )
         return [self._row_to_state(row) for row in rows]
+
+    @staticmethod
+    def _parse_trace_ids(value: Any) -> builtins.list[str]:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(parsed, builtins.list):
+                return [item for item in parsed if isinstance(item, str)]
+            return []
+        if isinstance(value, builtins.list):
+            return [
+                item
+                for item in cast(builtins.list[Any], value)
+                if isinstance(item, str)
+            ]
+        return []
 
     @staticmethod
     def _row_to_state(row: dict[str, Any]) -> DataProcessTaskState:
@@ -163,6 +192,22 @@ class SQLiteDataProcessTaskStateStore(DataProcessTaskStateStore):
             finished_at=row.get("finished_at"),
             error=row.get("error"),
             retry_of_task_id=row.get("retry_of_task_id"),
+            extraction_trace_ids=SQLiteDataProcessTaskStateStore._parse_trace_ids(
+                row.get("extraction_trace_ids")
+            ),
+            analysis_trace_ids=SQLiteDataProcessTaskStateStore._parse_trace_ids(
+                row.get("analysis_trace_ids")
+            ),
+            extraction_fact_check_trace_ids=(
+                SQLiteDataProcessTaskStateStore._parse_trace_ids(
+                    row.get("extraction_fact_check_trace_ids")
+                )
+            ),
+            analysis_fact_check_trace_ids=(
+                SQLiteDataProcessTaskStateStore._parse_trace_ids(
+                    row.get("analysis_fact_check_trace_ids")
+                )
+            ),
         )
 
 

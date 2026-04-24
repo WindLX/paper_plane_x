@@ -31,7 +31,7 @@ curl -s http://127.0.0.1:8000/health
 
 3. 追溯与审计
 - 论文记录关联 raw_pdf_path
-- 论文记录关联 `extraction_final_fact_check_trace_id` 与 `analysis_final_fact_check_trace_id`
+- 论文记录关联 extraction / analysis / fact-check 分支的全量 trace_id 数组
 - agent_traces 持久化 `trace_id/agent_name` 与 LLM usage 字段
 
 4. 并行双 Loop 处理

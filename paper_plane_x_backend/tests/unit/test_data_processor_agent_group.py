@@ -55,7 +55,7 @@ class _FakeExtractionAgent:
     runtime_name = "ExtractionAgent"
 
     def __init__(self) -> None:
-        self.last_trace_id = "trace-extraction"
+        self.trace_ids = ["trace-extraction"]
 
     def reset_memory(self) -> None:
         return
@@ -78,7 +78,7 @@ class _FakeFactCheckAgent:
 
     def __init__(self, result: Any) -> None:
         self._result = result
-        self.last_trace_id = "trace-fact-check"
+        self.trace_ids = ["trace-fact-check"]
 
     def reset_memory(self) -> None:
         return
@@ -108,7 +108,7 @@ class _FakeAnalysisAgent:
     runtime_name = "AnalysisAgent"
 
     def __init__(self) -> None:
-        self.last_trace_id = "trace-analysis"
+        self.trace_ids = ["trace-analysis"]
 
     def reset_memory(self) -> None:
         return
@@ -187,5 +187,7 @@ async def test_group_run_parallel_loops_returns_both_branches_and_trace_ids() ->
     assert analysis_fact_check_result.is_passed is True
     assert analysis_retry_count == 0
 
-    assert group.extraction_last_fact_check_trace_id == "trace-fact-check"
-    assert group.analysis_last_fact_check_trace_id == "trace-fact-check"
+    assert group.extraction_trace_ids == ["trace-extraction"]
+    assert group.analysis_trace_ids == ["trace-analysis"]
+    assert group.extraction_fact_check_trace_ids == ["trace-fact-check"]
+    assert group.analysis_fact_check_trace_ids == ["trace-fact-check"]

@@ -57,6 +57,10 @@ def _to_task_response(state: DataProcessTaskState) -> DataProcessTaskResponse:
         finished_at=state.finished_at,
         error=state.error,
         retry_of_task_id=state.retry_of_task_id,
+        extraction_trace_ids=state.extraction_trace_ids,
+        analysis_trace_ids=state.analysis_trace_ids,
+        extraction_fact_check_trace_ids=state.extraction_fact_check_trace_ids,
+        analysis_fact_check_trace_ids=state.analysis_fact_check_trace_ids,
     )
 
 

@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -25,13 +26,37 @@ from paper_plane_x_backend.services.paper.repository import PaperRepository
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class PaperProcessResult:
+    """PaperProcessor 一次执行的结构化结果。"""
+
+    paper: Paper
+    extraction_trace_ids: list[str]
+    analysis_trace_ids: list[str]
+    extraction_fact_check_trace_ids: list[str]
+    analysis_fact_check_trace_ids: list[str]
+
+
 class PaperProcessorError(Exception):
     """PaperProcessor 异常."""
 
-    def __init__(self, message: str, paper_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        paper_id: str | None = None,
+        *,
+        extraction_trace_ids: list[str] | None = None,
+        analysis_trace_ids: list[str] | None = None,
+        extraction_fact_check_trace_ids: list[str] | None = None,
+        analysis_fact_check_trace_ids: list[str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.paper_id = paper_id
+        self.extraction_trace_ids = extraction_trace_ids or []
+        self.analysis_trace_ids = analysis_trace_ids or []
+        self.extraction_fact_check_trace_ids = extraction_fact_check_trace_ids or []
+        self.analysis_fact_check_trace_ids = analysis_fact_check_trace_ids or []
 
 
 class PaperProcessor:
@@ -60,7 +85,7 @@ class PaperProcessor:
         paper_id: str,
         pdf_path: Path | None = None,
         max_retries: int = 3,
-    ) -> Paper:
+    ) -> PaperProcessResult:
         """处理已存在的 Paper 记录（执行 Agent 提取）.
 
         Args:
@@ -83,7 +108,13 @@ class PaperProcessor:
                 "event=paper.processing_skipped paper_id=%s reason=already_completed",
                 paper_id,
             )
-            return paper
+            return PaperProcessResult(
+                paper=paper,
+                extraction_trace_ids=[],
+                analysis_trace_ids=[],
+                extraction_fact_check_trace_ids=[],
+                analysis_fact_check_trace_ids=[],
+            )
 
         try:
             self.repo.update_status(
@@ -114,11 +145,13 @@ class PaperProcessor:
                 paper_id=paper_id,
                 stage="Failed to process paper",
                 error=e,
-                extraction_final_fact_check_trace_id=(
-                    self.agent_group.extraction_last_fact_check_trace_id
+                extraction_trace_ids=self.agent_group.extraction_trace_ids,
+                analysis_trace_ids=self.agent_group.analysis_trace_ids,
+                extraction_fact_check_trace_ids=(
+                    self.agent_group.extraction_fact_check_trace_ids
                 ),
-                analysis_final_fact_check_trace_id=(
-                    self.agent_group.analysis_last_fact_check_trace_id
+                analysis_fact_check_trace_ids=(
+                    self.agent_group.analysis_fact_check_trace_ids
                 ),
             )
 
@@ -128,7 +161,7 @@ class PaperProcessor:
         md_content: str,
         image_paths: list[Path],
         max_retries: int,
-    ) -> Paper:
+    ) -> PaperProcessResult:
         """执行提取-核查-持久化公共流水线。"""
         self._log_stage(
             paper_id,
@@ -151,14 +184,18 @@ class PaperProcessor:
                 max_retries=max_retries,
             )
         except RuntimeError as e:
-            raise PaperProcessorError(str(e), paper_id=paper_id) from e
-
-        extraction_final_fact_check_trace_id = (
-            self.agent_group.extraction_last_fact_check_trace_id
-        )
-        analysis_final_fact_check_trace_id = (
-            self.agent_group.analysis_last_fact_check_trace_id
-        )
+            raise PaperProcessorError(
+                str(e),
+                paper_id=paper_id,
+                extraction_trace_ids=self.agent_group.extraction_trace_ids,
+                analysis_trace_ids=self.agent_group.analysis_trace_ids,
+                extraction_fact_check_trace_ids=(
+                    self.agent_group.extraction_fact_check_trace_ids
+                ),
+                analysis_fact_check_trace_ids=(
+                    self.agent_group.analysis_fact_check_trace_ids
+                ),
+            ) from e
 
         self._log_stage(paper_id, "Stage 4", "Saving results to database")
         paper = self._save_pipeline_result(
@@ -169,20 +206,30 @@ class PaperProcessor:
             analysis_fact_check_result=analysis_fact_check_result,
             extraction_retry_count=extraction_retry_count,
             analysis_retry_count=analysis_retry_count,
-            extraction_final_fact_check_trace_id=extraction_final_fact_check_trace_id,
-            analysis_final_fact_check_trace_id=analysis_final_fact_check_trace_id,
         )
 
         logger.info("event=paper.processing_completed paper_id=%s", paper_id)
-        return paper
+        return PaperProcessResult(
+            paper=paper,
+            extraction_trace_ids=list(self.agent_group.extraction_trace_ids),
+            analysis_trace_ids=list(self.agent_group.analysis_trace_ids),
+            extraction_fact_check_trace_ids=list(
+                self.agent_group.extraction_fact_check_trace_ids
+            ),
+            analysis_fact_check_trace_ids=list(
+                self.agent_group.analysis_fact_check_trace_ids
+            ),
+        )
 
     def _raise_error(
         self,
         paper_id: str,
         stage: str,
         error: Exception,
-        extraction_final_fact_check_trace_id: str | None = None,
-        analysis_final_fact_check_trace_id: str | None = None,
+        extraction_trace_ids: list[str] | None = None,
+        analysis_trace_ids: list[str] | None = None,
+        extraction_fact_check_trace_ids: list[str] | None = None,
+        analysis_fact_check_trace_ids: list[str] | None = None,
     ) -> NoReturn:
         """统一处理失败状态更新与异常抛出。"""
         logger.exception(
@@ -193,8 +240,6 @@ class PaperProcessor:
                 paper_id=paper_id,
                 status=ExtractionStatus.FAILED,
                 error_message=str(error),
-                extraction_final_fact_check_trace_id=extraction_final_fact_check_trace_id,
-                analysis_final_fact_check_trace_id=analysis_final_fact_check_trace_id,
             )
         except Exception as update_error:
             logger.error(
@@ -206,6 +251,10 @@ class PaperProcessor:
         raise PaperProcessorError(
             message=f"{stage}: {error}",
             paper_id=paper_id,
+            extraction_trace_ids=extraction_trace_ids,
+            analysis_trace_ids=analysis_trace_ids,
+            extraction_fact_check_trace_ids=extraction_fact_check_trace_ids,
+            analysis_fact_check_trace_ids=analysis_fact_check_trace_ids,
         ) from error
 
     def _save_pipeline_result(
@@ -217,8 +266,6 @@ class PaperProcessor:
         analysis_fact_check_result: FactCheckAgentOutput,
         extraction_retry_count: int,
         analysis_retry_count: int,
-        extraction_final_fact_check_trace_id: str | None,
-        analysis_final_fact_check_trace_id: str | None,
     ) -> Paper:
         """更新 Paper 记录为完成状态."""
         is_all_passed = (
@@ -249,7 +296,6 @@ class PaperProcessor:
             "extraction_fact_check_result": json.dumps(
                 extraction_fact_check_result.model_dump(), ensure_ascii=False
             ),
-            "extraction_final_fact_check_trace_id": extraction_final_fact_check_trace_id,
             "analysis_fact_check_status": (
                 FactCheckStatus.PASSED
                 if analysis_fact_check_result.is_passed
@@ -258,7 +304,6 @@ class PaperProcessor:
             "analysis_fact_check_result": json.dumps(
                 analysis_fact_check_result.model_dump(), ensure_ascii=False
             ),
-            "analysis_final_fact_check_trace_id": analysis_final_fact_check_trace_id,
             "extraction_retry_count": extraction_retry_count,
             "analysis_retry_count": analysis_retry_count,
             "updated_at": datetime.now(),
