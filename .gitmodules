@@ -9,3 +9,7 @@
 [submodule "paper_plane_x_zotero"]
 	path = paper_plane_x_zotero
 	url = git@github.com:WindLX/paper_plane_x_zotero.git
+
+[submodule "paper_plane_x_cli"]
+	path = paper_plane_x_cli
+	url = git@github.com:WindLX/paper_plane_x_cli.git
