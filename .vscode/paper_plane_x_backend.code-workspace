@@ -3,6 +3,9 @@
     {
       "path": "../paper_plane_x_backend",
     },
+    {
+      "path": "../paper_plane_x_cli",
+    },
   ],
   "settings": {},
 }
