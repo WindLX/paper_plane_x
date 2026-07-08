@@ -54,6 +54,13 @@ Docker 模式只需要 Docker / Docker Compose。前端开发需要 Node.js 和 
 
 ## 安装和启动
 
+### 拉取源码
+
+```bash
+git clone --recursives https://github.com/WindLX/paper_plane_x.git 
+```
+
+
 ### 非 Docker 模式
 
 如果你想直接用 Python 运行后端，请 clone 整个仓库。后端可以独立启动，但 Web 控制台的构建产物来自前端项目或 GitHub Release。
