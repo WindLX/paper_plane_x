@@ -325,3 +325,7 @@ Release workflow 会：
 ```bash
 python scripts/sync_version.py --set 0.1.1
 ```
+
+## License
+
+Paper Plane X 使用 [GNU Affero General Public License v3.0 or later](LICENSE)。
