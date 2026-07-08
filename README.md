@@ -142,7 +142,7 @@ http://127.0.0.1:8000
 
 ### CLI
 
-`ppx` CLI 发布到 PyPI 后，可以通过 uv 直接安装：
+`ppx` CLI 已经发布到 PyPI，可以通过 uv 直接安装：
 
 ```bash
 uv tool install paper-plane-x-cli
