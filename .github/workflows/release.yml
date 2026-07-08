@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-version:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate VERSION matches tag
+        id: version
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "${version}" != "${tag}" ]; then
+            echo "VERSION (${version}) must match tag (${tag})." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  cli-dist:
+    name: Build CLI distribution
+    runs-on: ubuntu-latest
+    needs: validate-version
+    defaults:
+      run:
+        working-directory: paper_plane_x_cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: uv build
+
+      - name: Upload CLI distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-dist
+          path: paper_plane_x_cli/dist/*
+
+  publish-cli-pypi:
+    name: Publish CLI to PyPI
+    runs-on: ubuntu-latest
+    needs: cli-dist
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download CLI distribution artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  frontend-assets:
+    name: Build frontend release assets
+    runs-on: ubuntu-latest
+    needs: validate-version
+    defaults:
+      run:
+        working-directory: paper_plane_x_frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: paper_plane_x_frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build standalone frontend
+        run: pnpm build
+
+      - name: Package standalone frontend
+        run: tar -C dist -czf "../paper-plane-x-frontend-${GITHUB_REF_NAME}.tar.gz" .
+
+      - name: Build backend-hosted console
+        run: pnpm exec vite build --base=/ --outDir console-dist --emptyOutDir
+
+      - name: Package backend-hosted console
+        run: tar -C console-dist -czf "../paper-plane-x-console-${GITHUB_REF_NAME}.tar.gz" .
+
+      - name: Upload frontend release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: |
+            paper-plane-x-frontend-${{ github.ref_name }}.tar.gz
+            paper-plane-x-console-${{ github.ref_name }}.tar.gz
+
+  zotero-assets:
+    name: Build Zotero release assets
+    runs-on: ubuntu-latest
+    needs: validate-version
+    defaults:
+      run:
+        working-directory: paper_plane_x_zotero
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: paper_plane_x_zotero/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:check
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Upload Zotero release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zotero-assets
+          path: |
+            paper_plane_x_zotero/.scaffold/build/*.xpi
+            paper_plane_x_zotero/.scaffold/build/update*.json
+
+  docker-image:
+    name: Publish backend Docker image
+    runs-on: ubuntu-latest
+    needs: validate-version
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image name
+        id: image
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${owner}/paper-plane-x-backend" >> "${GITHUB_OUTPUT}"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: paper_plane_x_backend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ needs.validate-version.outputs.version }}
+            ${{ steps.image.outputs.name }}:latest
+
+  github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - validate-version
+      - cli-dist
+      - publish-cli-pypi
+      - frontend-assets
+      - zotero-assets
+      - docker-image
+    steps:
+      - name: Download CLI distribution artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-dist
+          path: release-assets/cli
+
+      - name: Download frontend release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: release-assets/frontend
+
+      - name: Download Zotero release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: zotero-assets
+          path: release-assets/zotero
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "Paper Plane X ${GITHUB_REF_NAME}" \
+              --notes "Release ${GITHUB_REF_NAME}"
+          find release-assets -type f -print0 | xargs -0 gh release upload "${GITHUB_REF_NAME}" --clobber

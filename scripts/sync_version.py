@@ -12,9 +12,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
 TARGETS = [
     REPO_ROOT / "paper_plane_x_backend" / "pyproject.toml",
-    REPO_ROOT / "paper_plane_x_backend" / "src" / "paper_plane_x_backend" / "pyproject.toml",
+    REPO_ROOT / "paper_plane_x_cli" / "pyproject.toml",
 ]
 FRONTEND_PACKAGE_JSON = REPO_ROOT / "paper_plane_x_frontend" / "package.json"
+ZOTERO_PACKAGE_JSON = REPO_ROOT / "paper_plane_x_zotero" / "package.json"
+ZOTERO_PACKAGE_LOCK = REPO_ROOT / "paper_plane_x_zotero" / "package-lock.json"
 
 
 def read_version() -> str:
@@ -50,6 +52,18 @@ def sync_package_json_version(path: Path, version: str) -> None:
     )
 
 
+def sync_package_lock_version(path: Path, version: str) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["version"] = version
+    root_package = payload.get("packages", {}).get("")
+    if isinstance(root_package, dict):
+        root_package["version"] = version
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -69,6 +83,8 @@ def main() -> int:
     for path in TARGETS:
         sync_toml_version(path, version)
     sync_package_json_version(FRONTEND_PACKAGE_JSON, version)
+    sync_package_json_version(ZOTERO_PACKAGE_JSON, version)
+    sync_package_lock_version(ZOTERO_PACKAGE_LOCK, version)
 
     print(f"Synced version {version}")
     return 0
