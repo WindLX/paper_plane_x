@@ -59,3 +59,6 @@ dev-frontend:
 
 build-console:
     just frontend build-console
+
+version *args:
+    python scripts/sync_version.py {{args}}
