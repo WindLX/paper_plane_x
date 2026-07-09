@@ -31,6 +31,10 @@ Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地
 
 ![设置页](docs/assets/screenshots/settings.png)
 
+Zotero 插件侧边栏：在 Zotero 条目右侧直接查看 Paper Plane X 的处理状态、quick scan、综合提炼、深度分析和事实核查结果。
+
+![Zotero 插件侧边栏](docs/assets/screenshots/zotero-sidebar.png)
+
 ## 组件
 
 | 目录                      | 作用                                                                             | 适合谁                        |
