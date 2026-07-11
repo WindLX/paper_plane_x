@@ -1,130 +1,117 @@
 # Paper Plane X
 
-Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地优先工作台。它把 PDF 解析、结构化论文抽取、事实核查、项目文件、文献检索和外部 Agent 工具串成一条可复用的研究流水线。
+[![CI](https://github.com/WindLX/paper_plane_x/actions/workflows/ci.yml/badge.svg)](https://github.com/WindLX/paper_plane_x/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/WindLX/paper_plane_x)](https://github.com/WindLX/paper_plane_x/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/paper-plane-x-cli)](https://pypi.org/project/paper-plane-x-cli/)
+[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
-你可以用它做这些事：
+Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地优先研究工作台。它将 Zotero 文献管理、PDF 解析、结构化论文抽取、事实核查、项目文件、文献检索和外部 AI Agent 串成一条可复用、可追踪的研究流水线。
 
-- 把论文 PDF 上传到后端，解析为 Markdown，并抽取 quick scan、方法、结果、理论分析等结构化字段。
-- 按项目管理论文、笔记、草稿和导出文件。
-- 在文献库中搜索、筛选、查看单篇论文详情。
-- 用 Librarian 在项目或全库范围内检索论文、拉取对比矩阵、做单篇 deep dive。
-- 通过 `ppx` CLI 和 `ppx-researcher` skill，让 Codex、Claude Code、Pi agent 等外部 Agent 读写项目文件、查询论文和沉淀研究结果。
-- 通过 Zotero 插件把文献管理器里的论文送入 Paper Plane X。
+项目适合希望保留本地数据控制权，同时让 AI 基于真实论文证据辅助阅读、比较和写作的研究者与开发者。
 
-## Web 预览
+## 核心能力
 
-项目文件页：项目级笔记、草稿和中间产物集中管理。
+- **论文处理流水线**：将 PDF 解析为 Markdown，并生成 quick scan、综合提炼、深度分析与事实核查结果。
+- **项目化研究空间**：集中管理论文、笔记、草稿、对比矩阵和导出文件。
+- **文献检索与比较**：通过 Librarian 搜索论文、提取字段矩阵并对单篇论文进行深度分析。
+- **Zotero 集成**：从 Zotero 上传 PDF、查看处理状态、关联项目并浏览结构化分析结果。
+- **Web 控制台**：管理项目、文献库、后台任务、Agent traces 和运行时设置。
+- **CLI 与 Agent Skills**：让 Codex、Claude Code、Pi agent 等工具通过受控 API 查询论文并将结果写回项目。
+- **本地优先**：核心数据默认存储在本地 SQLite 和项目数据目录中；模型与解析服务由用户自行配置。
+
+## 界面预览
+
+### 项目文件
+
+在项目级沙箱中管理研究计划、笔记、数据文件和综述草稿，并导出 Markdown、HTML、DOCX 或 PDF。
 
 ![项目文件页](docs/assets/screenshots/project-files.png)
 
-文献列表：查看项目论文、处理状态和基础元数据。
+### 文献库与论文详情
+
+浏览论文状态和元数据，查看 quick scan、综合提炼、深度分析、事实核查和 Agent 备注。
 
 ![文献列表](docs/assets/screenshots/library.png)
 
-论文详情：查看 quick scan、结构化抽取、分析报告和 paper note。
-
 ![论文详情](docs/assets/screenshots/paper-detail.png)
 
-任务监控与设置：
+### 任务与设置
+
+跟踪后台处理任务，并配置 LLM Provider、Agent、PDF Parser、Pandoc 和运行参数。
 
 ![任务监控](docs/assets/screenshots/tasks.png)
 
 ![设置页](docs/assets/screenshots/settings.png)
 
-Zotero 插件侧边栏：在 Zotero 条目右侧直接查看 Paper Plane X 的处理状态、quick scan、综合提炼、深度分析和事实核查结果。
+### Zotero 插件
+
+在 Zotero 右侧面板直接查看 Paper Plane X 的处理状态和结构化研究结果。
 
 ![Zotero 插件侧边栏](docs/assets/screenshots/zotero-sidebar.png)
 
-## 组件
+## 系统架构
 
-| 目录                      | 作用                                                                             | 适合谁                        |
-| ------------------------- | -------------------------------------------------------------------------------- | ----------------------------- |
-| `paper_plane_x_backend/`  | FastAPI 后端，提供 PDF 解析、论文处理、Librarian、Project files、Settings 等 API | 本地运行、部署、脚本调用      |
-| `paper_plane_x_frontend/` | Vue 3 Web 控制台，连接后端 API                                                   | 日常使用者                    |
-| `paper_plane_x_cli/`      | `ppx` HTTP CLI 与外部 Agent skills                                               | 命令行用户、自动化脚本、Agent |
-| `paper_plane_x_zotero/`   | Zotero 7 插件                                                                    | Zotero 用户                   |
-
-后端是核心服务。前端、CLI 和 Zotero 插件都通过后端 HTTP API 工作。
-
-## 前置依赖
-
-非 Docker 模式运行后端、开发 Python 项目、安装 CLI 都依赖 [uv](https://docs.astral.sh/uv/)。如果本机还没有 uv，先按官方文档安装：
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+```mermaid
+flowchart LR
+    Z["Zotero 插件"] --> B["Paper Plane X Backend"]
+    W["Vue Web 控制台"] --> B
+    C["ppx CLI"] --> B
+    A["外部 AI Agent + Skills"] --> C
+    B --> D["SQLite / 本地数据目录"]
+    B --> P["PDF Parser\nLocal / Cloud MinerU"]
+    B --> L["LLM Providers"]
+    B --> F["项目文件与导出\nPandoc"]
 ```
 
-Docker 模式只需要 Docker / Docker Compose。前端开发需要 Node.js 和 pnpm；Zotero 插件开发需要 Node.js 和 npm。
+后端是系统的唯一业务入口。前端、CLI、Zotero 插件和外部 Agent 都通过 `/api/v1` HTTP API 访问数据，不直接读取数据库。
 
-## 安装和启动
+## 仓库结构
 
-### 拉取源码
+本仓库是协调发布与集成测试的顶层仓库，四个组件通过 Git submodule 管理：
+
+| 目录                                                          | 组件                                 |
+| ------------------------------------------------------------- | ------------------------------------ |
+| [`paper_plane_x_backend/`](paper_plane_x_backend/README.md)   | FastAPI 后端、任务处理、数据库与 API |
+| [`paper_plane_x_frontend/`](paper_plane_x_frontend/README.md) | Vue 3 Web 控制台                     |
+| [`paper_plane_x_cli/`](paper_plane_x_cli/README.zh.md)        | `ppx` HTTP CLI 与 Agent Skills       |
+| [`paper_plane_x_zotero/`](paper_plane_x_zotero/README.md)     | Zotero 7+ 插件                       |
+
+## 面向用户：安装与运行
+
+### 方式一：Backend + Web Console（推荐）
+
+要求：Git、Python 3.12+ 和 [uv](https://docs.astral.sh/uv/)。这种方式无需安装 Node.js，也无需克隆完整 monorepo。
 
 ```bash
-git clone --recursives https://github.com/WindLX/paper_plane_x.git 
-```
-
-
-### 非 Docker 模式
-
-如果你想直接用 Python 运行后端，请 clone 整个仓库。后端可以独立启动，但 Web 控制台的构建产物来自前端项目或 GitHub Release。
-
-```bash
-git clone <repo-url>
-cd paper_plane_x
+git clone https://github.com/WindLX/paper_plane_x_backend.git
 cd paper_plane_x_backend
 uv sync
 cp .env.example .env
-uv run app
-```
-
-健康检查：
-
-```bash
-curl -s http://127.0.0.1:8000/health
-```
-
-浏览器打开：
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-如果你愿意本地编译 Web 控制台：
-
-```bash
-cd paper_plane_x
-just build-console
-cd paper_plane_x_backend
-uv run app
-```
-
-如果你不想本地编译 Web 控制台，可以从 GitHub Release 下载 `paper-plane-x-console-vX.Y.Z.tar.gz`，解压到后端默认 console 目录：
-
-```bash
-cd paper_plane_x_backend
 mkdir -p data/console
-tar -xzf ~/Downloads/paper-plane-x-console-vX.Y.Z.tar.gz -C data/console
+```
+
+从 [Paper Plane X 最新 Release](https://github.com/WindLX/paper_plane_x/releases/latest) 下载 `paper-plane-x-console-vX.Y.Z.tar.gz`，然后解压到 backend 的 `data/console/`：
+
+```bash
+tar -xzf paper-plane-x-console-vX.Y.Z.tar.gz -C data/console
 uv run app
 ```
 
-然后打开：
+打开 `http://127.0.0.1:8000`。后端会直接托管 Web Console，API 文档位于 `http://127.0.0.1:8000/docs`。
 
-```text
-http://127.0.0.1:8000
-```
+升级时先停止服务、更新 backend，再用新 Release 中的 console 完整替换 `data/console/`。数据库、论文和设置位于 `data/` 的其他路径，不应随 console 一起删除。
 
-### Docker 模式
+### 方式二：Docker Compose
 
-发布版 Docker image 已经内置 Web 控制台。你可以在任意目录自己创建 `docker-compose.yml`：
+发布镜像已包含 Web 控制台。准备一个空目录并创建 `docker-compose.yml`：
 
 ```yaml
 services:
   backend:
-    image: ghcr.io/<owner>/paper-plane-x-backend:<version>
+    image: ghcr.io/windlx/paper-plane-x-backend:latest
     container_name: paper-plane-x-backend
     environment:
-      - PPX_API__HOST=0.0.0.0
+      PPX_API__HOST: 0.0.0.0
     ports:
       - "8000:8000"
     volumes:
@@ -132,31 +119,47 @@ services:
     restart: unless-stopped
 ```
 
-启动：
+启动服务：
 
 ```bash
-docker compose up
+docker compose up -d
 ```
 
-如果你已经 clone 了仓库，也可以直接使用我们提供的发布 compose：
+打开 `http://127.0.0.1:8000`。发布镜像已经内置对应版本的 Web Console。
+
+若已克隆本仓库，也可以使用随项目提供的发布配置：
 
 ```bash
-cd paper_plane_x_backend
-GHCR_OWNER=<owner> PPX_VERSION=0.1.0 docker compose -f docker-compose.release.yml up
+GHCR_OWNER=windlx PPX_VERSION=latest \
+  docker compose -f paper_plane_x_backend/docker-compose.release.yml up -d
 ```
 
-默认访问：
+### 方式三：从 monorepo 源码运行
 
-```text
-http://127.0.0.1:8000
+要求：Git、Python 3.12+、[uv](https://docs.astral.sh/uv/)、Node.js 24、pnpm 和 [just](https://github.com/casey/just)。
+
+```bash
+git clone --recursive https://github.com/WindLX/paper_plane_x.git
+cd paper_plane_x
+just setup
+cp paper_plane_x_backend/.env.example paper_plane_x_backend/.env
+just build-console
+just backend dev
 ```
 
-### CLI
+如果克隆时漏掉 submodule：
 
-`ppx` CLI 已经发布到 PyPI，可以通过 uv 直接安装：
+```bash
+git submodule update --init --recursive
+```
+
+### 安装 CLI
+
+推荐使用 uv 从 PyPI 安装隔离的命令行工具：
 
 ```bash
 uv tool install paper-plane-x-cli
+ppx --help
 ```
 
 升级：
@@ -165,178 +168,158 @@ uv tool install paper-plane-x-cli
 uv tool upgrade paper-plane-x-cli
 ```
 
-卸载：
+### 安装 Zotero 插件
 
-```bash
-uv tool uninstall paper-plane-x-cli
-```
+推荐访问 [Zotero 中文社区插件商店](https://zotero-chinese.github.io/plugins/)，搜索 **Paper Plane X** 并直接安装。
 
-### Zotero 插件
+也可以从 [最新 Release](https://github.com/WindLX/paper_plane_x/releases/latest) 下载 `paper-plane-x.xpi`，然后在 Zotero 的 `Tools → Plugins → Install Plugin From File` 中手动安装。
 
-Zotero 插件会作为 GitHub Release asset 发布。下载 `paper-plane-x.xpi` 后，在 Zotero 中安装：
+安装后，在 `Zotero Settings → Paper Plane X` 中填写后端地址，例如 `http://127.0.0.1:8000`；不要附加 `/api/v1`。
 
-```text
-Zotero -> Tools -> Plugins -> Install Plugin From File
-```
-
-### 前端开发模式
-
-如果想要开发 Web 控制台，请再单独启动前端开发服务器：
-
-```bash
-cd paper_plane_x_frontend
-pnpm install
-cp .env.example .env
-pnpm dev
-```
-
-默认访问：
-
-```text
-http://127.0.0.1:5173
-```
+详见 [Zotero 插件 README](paper_plane_x_zotero/README.md)。
 
 ## 首次配置
 
-进入前端 Settings 页面，完成：
+启动服务后，在 Web 控制台的 **Settings** 页面完成：
 
-1. 添加 LLM Provider。
-2. 将 `extraction`、`analysis`、`fact_check`、`deep_diver`、`query_builder`、`global_finder` 绑定到 Provider。
-3. 配置 PDF Parser。如果使用本地 [MinerU](https://opendatalab.github.io/MinerU/)，先确认 MinerU 服务地址可访问；源码见 [opendatalab/MinerU](https://github.com/opendatalab/MinerU)。
+1. 添加至少一个 LLM Provider。
+2. 为 `extraction`、`analysis`、`fact_check`、`deep_diver`、`query_builder` 和 `global_finder` 绑定 Provider。
+3. 配置 PDF Parser：使用本地 MinerU 服务或 MinerU Cloud。
+4. 如需导出 DOCX、HTML 或 PDF，配置 Pandoc 路径、HTML 模板和可选 PDF engine。
+5. 根据机器资源调整 Data Process worker 和任务超时。
 
-没有 LLM Provider 时，可以创建项目和上传文件，但自动论文抽取、分析、deep dive 等 Agent 能力不能完整运行。
+没有配置 LLM Provider 时，项目和文件管理仍可使用，但自动抽取、分析和 deep dive 无法完整运行。
 
-## 典型工作流
+不要把 API key 提交到 Git。运行时密钥保存在后端数据目录的动态设置文件中，生产部署应同时保护数据卷和备份。
 
-1. 在前端创建一个项目。
-2. 上传 PDF 到文献库，等待 data-process 任务完成。
-3. 将论文关联到项目。
-4. 在项目文献页查看 quick scan、处理状态和结构化字段。
-5. 在项目文件页保存研究计划、对比矩阵和综述草稿。
-6. 使用 Librarian 搜索论文、拉取字段矩阵或做单篇 deep dive。
-7. 使用 `ppx` CLI 或外部 Agent skill 自动整理结果。
+## 推荐研究工作流
 
-CLI 示例：
+1. 在 Web 控制台创建研究项目。
+2. 通过 Zotero 插件或 Web 文献库上传带 PDF 附件的论文。
+3. 在 Tasks 页面等待 PDF 解析和 Agent 处理完成。
+4. 将论文关联到项目，在项目或 Zotero 侧边栏查看结构化结果。
+5. 使用 Librarian 搜索相关论文、生成字段矩阵或执行 deep dive。
+6. 在项目文件中沉淀研究计划、比较表和综述草稿。
+7. 使用 `ppx` CLI 或 Agent Skills 自动查询证据并更新项目文件或 paper note。
+
+示例：
 
 ```bash
-uv tool install paper-plane-x-cli
+ppx context set \
+  --base-url http://127.0.0.1:8000/api/v1 \
+  --project-id prj_x
 
-ppx context set --base-url http://127.0.0.1:8000/api/v1 --project-id prj_x
 ppx project global-finder
 ppx librarian search --query-expr "(quick_scan.tags CONTAINS 图神经网络)"
-ppx librarian matrix --paper-ids pap_a,pap_b --field-paths meta.title,quick_scan.quick_summary
+ppx librarian matrix \
+  --paper-ids pap_a,pap_b \
+  --field-paths meta.title,quick_scan.quick_summary
 ppx files upload --source ./notes.md --path /notes/notes.md
 ```
 
-## Agent 阅读论文效果
-
-安装 CLI skills 后，Codex、Claude Code、Pi agent 等外部 Agent 可以通过 `ppx` 访问同一个 Paper Plane X 项目。它不会直接读数据库，也不会猜测论文内容；它会先调用后端 API 获取证据，再把可复用结果写回项目文件或 paper note。
-
-安装 CLI 和 skills：
+### 让外部 Agent 使用项目文献
 
 ```bash
-uv tool install paper-plane-x-cli
 ppx skills install
 ```
 
-如果你的 Agent 使用其他 skills 目录，也可以显式指定：
-
-```bash
-ppx skills install --target-dir ~/.agents/skills
-ppx skills install --target-dir ~/.claude/skills
-ppx skills install --target-dir ./.claude/skills
-```
-
-设置项目上下文：
-
-```bash
-ppx context set --base-url http://127.0.0.1:8000/api/v1 --project-id prj_x
-```
-
-然后可以直接对 Agent 说：
+安装后可向 Agent 提出类似任务：
 
 ```text
-请使用 ppx-researcher 帮我梳理这个项目里关于图神经网络的论文，比较它们的核心方法、数据集、指标和局限，并把结果写入 /notes/gnn-comparison.md。
+请使用 ppx-researcher 梳理当前项目中关于图神经网络的论文，比较核心方法、数据集、指标和局限，并将结果写入 /notes/gnn-comparison.md。
 ```
 
-一次典型执行会像这样发生：
+Agent Skill 要求先通过 CLI/API 获取证据，再生成结论并写回项目，避免绕过后端或凭空补全论文内容。
 
-1. Agent 运行 `ppx context show` 确认后端和项目。
-2. 用 `ppx project global-finder` 查看项目有哪些论文。
-3. 用 `ppx librarian search` 搜索相关论文。
-4. 用 `ppx librarian matrix` 拉取标题、quick scan、方法、实验结果等结构化字段。
-5. 对关键论文调用 `ppx librarian deep-dive` 做定向追问。
-6. 用 `ppx files upload/write/patch` 把对比表、综述段落或阅读计划写入项目文件。
-7. 对单篇论文的稳定结论，用 `ppx paper-note write` 写入 paper note。
+## 面向开发者
 
-适合交给 Agent 的任务：
-
-- “找出项目里最值得精读的 5 篇论文，并说明理由。”
-- “比较这些论文的实验设置，生成一个 Markdown 表格。”
-- “读取 `pap_x` 的完整 Markdown，解释核心公式和算法流程。”
-- “基于当前项目文件，续写 Related Work 草稿。”
-- “把这篇论文的局限和可复用观点写入 paper note。”
-
-## 日常开发命令
-
-仓库提供 `justfile`：
+### 常用命令
 
 ```bash
+just setup        # 安装四个组件的依赖
+just test         # 运行全部测试
+just lint         # 运行全部 lint
+just build        # 构建全部组件
+just pre-commit   # 执行提交前检查
+
 just backend dev
 just frontend dev
-just backend test
-just frontend build
-just pre-commit
+just build-console
 ```
 
-也可以进入子项目运行：
+也可以进入子仓库执行其 `justfile` 中的组件命令。
+
+### 配置约定
+
+- 根目录 [`VERSION`](VERSION) 是发布版本的唯一来源。
+- 后端启动配置来自 TOML、`.env` 和 `PPX_*` 环境变量。
+- 前端开发配置使用 `VITE_API_BASE_URL`；后端托管时由运行时配置注入。
+- 本地配置、API key、数据库、解析产物和构建目录不得提交。
+- 路由、命令或配置契约变更时，应在同一个 PR 中更新对应 README 或详细文档。
+
+更多约定见 [PROJECT_CONVENTIONS.md](PROJECT_CONVENTIONS.md)。
+
+## 贡献与 Pull Request
+
+欢迎提交问题、文档改进和代码贡献。提交前请：
+
+1. 先搜索 [Issues](https://github.com/WindLX/paper_plane_x/issues)，确认问题没有重复。
+2. 从最新 `main` 创建范围明确的分支。
+3. 为行为变更补充或更新测试。
+4. 更新受影响的 README、API 文档或配置示例。
+5. 在受影响仓库运行 `just pre-commit`。
+6. PR 描述应说明动机、主要改动、验证命令；UI 变化请附截图。
+
+由于组件是独立 submodule，推荐流程如下：
+
+- **只修改顶层文档、CI 或发布编排**：直接向本仓库提交 PR。
+- **修改组件代码**：先向对应子仓库提交 PR；合并后，在顶层仓库更新 submodule 指针并提交第二个 PR。
+- 不要让顶层 PR 指向只有个人 fork 可见、尚未合并的 submodule commit。
+
+保持 PR 聚焦，不要混入无关格式化、依赖升级或生成文件。
+
+## 版本与发布
+
+Paper Plane X 使用语义化版本号。根目录 `VERSION` 是单一事实来源：
 
 ```bash
-cd paper_plane_x_backend && just test
-cd paper_plane_x_frontend && just build
-cd paper_plane_x_cli && just lint
+python scripts/sync_version.py --set X.Y.Z
 ```
 
-## 发布
+推荐发布流程：
 
-CI 位于 `.github/workflows/ci.yml`，会检查 backend、frontend、CLI、版本同步和 Docker 镜像构建。
-
-发布使用 tag 触发：
+1. 同步版本并运行所有组件的 `just pre-commit`。
+2. 提交并推送发生变化的子仓库。
+3. 在顶层仓库提交新的 submodule 指针和 `VERSION`。
+4. 创建并推送与 `VERSION` 一致的 `vX.Y.Z` tag。
 
 ```bash
-python scripts/sync_version.py --set 0.1.1
-git add VERSION paper_plane_x_backend/pyproject.toml paper_plane_x_cli/pyproject.toml paper_plane_x_frontend/package.json paper_plane_x_zotero/package.json paper_plane_x_zotero/package-lock.json
-git commit -m "Release 0.1.1"
-git tag v0.1.1
-git push origin main v0.1.1
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
 ```
 
-Release workflow 会：
+Release workflow 会构建并发布：
 
-- 构建并推送带 Web 控制台的 backend 镜像到 GHCR。
-- 构建 frontend/console 压缩包并附到 GitHub Release。
-- 构建 `paper-plane-x-cli` 并发布到 PyPI，供用户 `uv tool install paper-plane-x-cli`。
-- 构建 Zotero 插件 `.xpi` 和 `update*.json`，并附到 GitHub Release。
+- GHCR 后端镜像（内置 Web 控制台）；
+- 供 backend 托管的 Web Console 压缩包；
+- PyPI 上的 `paper-plane-x-cli`；
+- Zotero `.xpi` 与 `update*.json`；
+- 顶层 GitHub Release assets。
 
-首次发布 CLI 前，需要在 PyPI 为 `paper-plane-x-cli` 配置 GitHub Actions Trusted Publisher，环境名为 `pypi`，workflow 为 `.github/workflows/release.yml`。
+发布配置见 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
 
-## 更多文档
+## 文档与支持
 
-- [Backend README](paper_plane_x_backend/README.md)
-- [Frontend README](paper_plane_x_frontend/README.md)
-- [CLI README](paper_plane_x_cli/README.zh.md)
 - [Backend Quickstart](paper_plane_x_backend/docs/workflow_quickstart.md)
+- [Backend Architecture](paper_plane_x_backend/docs/architecture.md)
 - [Librarian Guide](paper_plane_x_backend/docs/librarian.md)
-- [Project Conventions](PROJECT_CONVENTIONS.md)
+- [Logging Conventions](paper_plane_x_backend/docs/logging_conventions.md)
+- [Roadmap](paper_plane_x_backend/docs/roadmap.md)
+- [Issues](https://github.com/WindLX/paper_plane_x/issues)
 
-## 版本
-
-版本号由根目录 `VERSION` 统一维护：
-
-```bash
-python scripts/sync_version.py --set 0.1.1
-```
+提交 Issue 时请提供组件、版本、复现步骤和相关日志，并先移除 API key、访问令牌、论文隐私数据和本地路径中的敏感信息。
 
 ## License
 
-Paper Plane X 使用 [GNU Affero General Public License v3.0 or later](LICENSE)。
+Paper Plane X 及本仓库中的四个组件使用 [GNU Affero General Public License v3.0 or later](LICENSE)。分发修改版本或通过网络提供修改后的服务时，请遵守 AGPL-3.0-or-later 的相应义务。

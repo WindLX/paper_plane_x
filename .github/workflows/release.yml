@@ -83,8 +83,8 @@ jobs:
           packages-dir: dist
           skip-existing: true
 
-  frontend-assets:
-    name: Build frontend release assets
+  console-assets:
+    name: Build Web console release asset
     runs-on: ubuntu-latest
     needs: validate-version
     defaults:
@@ -112,25 +112,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build standalone frontend
+      - name: Build Web console
         run: pnpm build
 
-      - name: Package standalone frontend
-        run: tar -C dist -czf "../paper-plane-x-frontend-${GITHUB_REF_NAME}.tar.gz" .
+      - name: Package Web console
+        run: tar -C dist -czf "../paper-plane-x-console-${GITHUB_REF_NAME}.tar.gz" .
 
-      - name: Build backend-hosted console
-        run: pnpm exec vite build --base=/ --outDir console-dist --emptyOutDir
-
-      - name: Package backend-hosted console
-        run: tar -C console-dist -czf "../paper-plane-x-console-${GITHUB_REF_NAME}.tar.gz" .
-
-      - name: Upload frontend release artifacts
+      - name: Upload Web console release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-assets
-          path: |
-            paper-plane-x-frontend-${{ github.ref_name }}.tar.gz
-            paper-plane-x-console-${{ github.ref_name }}.tar.gz
+          name: console-assets
+          path: paper-plane-x-console-${{ github.ref_name }}.tar.gz
 
   zotero-assets:
     name: Build Zotero release assets
@@ -214,7 +206,7 @@ jobs:
       - validate-version
       - cli-dist
       - publish-cli-pypi
-      - frontend-assets
+      - console-assets
       - zotero-assets
       - docker-image
     steps:
@@ -224,11 +216,11 @@ jobs:
           name: cli-dist
           path: release-assets/cli
 
-      - name: Download frontend release artifacts
+      - name: Download Web console release artifact
         uses: actions/download-artifact@v4
         with:
-          name: frontend-assets
-          path: release-assets/frontend
+          name: console-assets
+          path: release-assets/console
 
       - name: Download Zotero release artifacts
         uses: actions/download-artifact@v4
