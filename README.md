@@ -16,7 +16,8 @@ Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地
 - **文献检索与比较**：通过 Librarian 搜索论文、提取字段矩阵并对单篇论文进行深度分析。
 - **Zotero 集成**：从 Zotero 上传 PDF、查看处理状态、关联项目并浏览结构化分析结果。
 - **Web 控制台**：管理项目、文献库、后台任务、Agent traces 和运行时设置。
-- **CLI 与 Agent Skills**：让 Codex、Claude Code、Pi agent 等工具通过受控 API 查询论文并将结果写回项目。
+- **CLI 与 Agent Skills**：让 Codex、Claude Code、Pi agent、DeepSeek Harness 等工具通过受控 API 查询论文并将结果写回项目。
+- **DeepSeek Harness 插件**：在 DeepSeek Harness Web 控制台内查看/管理 ppx 上下文，并通过 `/ppx-paper` 检索、引用论文（[`paper_plane_x_dsh`](paper_plane_x_dsh/README.md)）。
 - **本地优先**：核心数据默认存储在本地 SQLite 和项目数据目录中；模型与解析服务由用户自行配置。
 
 ## 界面预览
@@ -49,6 +50,14 @@ Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地
 
 ![Zotero 插件侧边栏](docs/assets/screenshots/zotero-sidebar.png)
 
+### DeepSeek Harness 插件
+
+在 DeepSeek Harness Web 控制台内查看/管理 ppx 上下文，并用 `/ppx-paper` 检索、引用论文：
+
+![DSH 上下文面板](docs/assets/screenshots/dsh-context.png)
+
+![DSH 论文检索](docs/assets/screenshots/dsh-paper.png)
+
 ## 系统架构
 
 ```mermaid
@@ -57,17 +66,19 @@ flowchart LR
     W["Vue Web 控制台"] --> B
     C["ppx CLI"] --> B
     A["外部 AI Agent + Skills"] --> C
+    H["DeepSeek Harness 插件"] --> C
+    H --> B
     B --> D["SQLite / 本地数据目录"]
     B --> P["PDF Parser\nLocal / Cloud MinerU"]
     B --> L["LLM Providers"]
     B --> F["项目文件与导出\nPandoc"]
 ```
 
-后端是系统的唯一业务入口。前端、CLI、Zotero 插件和外部 Agent 都通过 `/api/v1` HTTP API 访问数据，不直接读取数据库。
+后端是系统的唯一业务入口。前端、CLI、Zotero 插件、DeepSeek Harness 插件和外部 Agent 都通过 `/api/v1` HTTP API 访问数据，不直接读取数据库。
 
 ## 仓库结构
 
-本仓库是协调发布与集成测试的顶层仓库，四个组件通过 Git submodule 管理：
+本仓库是协调发布与集成测试的顶层仓库，五个组件通过 Git submodule 管理：
 
 | 目录                                                          | 组件                                 |
 | ------------------------------------------------------------- | ------------------------------------ |
@@ -75,6 +86,7 @@ flowchart LR
 | [`paper_plane_x_frontend/`](paper_plane_x_frontend/README.md) | Vue 3 Web 控制台                     |
 | [`paper_plane_x_cli/`](paper_plane_x_cli/README.zh.md)        | `ppx` HTTP CLI 与 Agent Skills       |
 | [`paper_plane_x_zotero/`](paper_plane_x_zotero/README.md)     | Zotero 7+ 插件                       |
+| [`paper_plane_x_dsh/`](paper_plane_x_dsh/README.md)           | DeepSeek Harness 插件                |
 
 ## 面向用户：安装与运行
 
@@ -177,6 +189,28 @@ uv tool upgrade paper-plane-x-cli
 安装后，在 `Zotero Settings → Paper Plane X` 中填写后端地址，例如 `http://127.0.0.1:8000`；不要附加 `/api/v1`。
 
 详见 [Zotero 插件 README](paper_plane_x_zotero/README.md)。
+
+### 安装 DeepSeek Harness 插件
+
+在 DeepSeek Harness Web 控制台里查看/管理 ppx 上下文，并通过 `/ppx-paper` 检索、引用论文。前置：已安装 `ppx` CLI（见上），以及可运行的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` 命令可用）。
+
+```bash
+# 1) 构建插件
+cd paper_plane_x_dsh
+pnpm install && pnpm build
+
+# 2) 装入 web profile（本地路径）
+dsh plugin --profile web add /path/to/paper_plane_x_dsh
+
+#    或从 Git 安装（SSH / HTTPS 二选一）
+dsh plugin --profile web add github:WindLX/paper_plane_x_dsh
+dsh plugin --profile web add git+https://github.com/WindLX/paper_plane_x_dsh.git
+
+# 3) 启动 Web
+dsh web
+```
+
+打开 `http://127.0.0.1:3080`，输入 `/ppx-context` 打开上下文面板、`/ppx-paper` 检索论文。详见 [DeepSeek Harness 插件 README](paper_plane_x_dsh/README.md)。
 
 ## 首次配置
 

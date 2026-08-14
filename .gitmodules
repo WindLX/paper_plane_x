@@ -13,3 +13,7 @@
 [submodule "paper_plane_x_cli"]
 	path = paper_plane_x_cli
 	url = https://github.com/WindLX/paper_plane_x_cli.git
+
+[submodule "paper_plane_x_dsh"]
+	path = paper_plane_x_dsh
+	url = git@github.com:WindLX/paper_plane_x_dsh.git
