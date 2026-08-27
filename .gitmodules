@@ -17,3 +17,6 @@
 [submodule "paper_plane_x_dsh"]
 	path = paper_plane_x_dsh
 	url = git@github.com:WindLX/paper_plane_x_dsh.git
+[submodule "paper_plane_x_radar"]
+	path = paper_plane_x_radar
+	url = https://github.com/WindLX/paper_plane_x_radar.git

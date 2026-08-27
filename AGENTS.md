@@ -3,17 +3,17 @@
 ## 适用范围与事实源
 
 - 本文件适用于工作区根目录；进入子项目后，必须继续读取该目录中的 `AGENTS.md`，更深目录的规则优先。
-- 本仓库是集成与发布工作区：Backend、CLI、DSH、Frontend 与 Zotero 是独立 Git submodule；不在根目录建立 Python 或 Node.js workspace，也不跨子项目共享虚拟环境、依赖目录或锁文件。
+- 本仓库是集成与发布工作区：Backend、CLI、DSH、Frontend、Zotero 与 Radar 是独立 Git submodule；不在根目录建立 Python 或 Node.js workspace，也不跨子项目共享虚拟环境、依赖目录或锁文件。
 - 修改某个子项目前，先进入其目录，并以该项目的 `pyproject.toml` / `package.json`、锁文件、`justfile`、README 和 `docs/` 为事实源；文档与实现冲突时先核对代码和测试，再同步修正文档。
 - 根 `justfile` 只负责跨项目编排。项目内开发优先运行该项目自己的 `just` 命令，不凭记忆拼装替代命令。
 - 不在 `AGENTS.md` 中复制功能清单、接口清单或易过时的实现细节；项目机制应记录在 README、`docs/`、API schema 和代码中。
 
 ## 工作区与 Git 管理
 
-- `paper_plane_x_backend`、`paper_plane_x_cli`、`paper_plane_x_dsh`、`paper_plane_x_frontend`、`paper_plane_x_zotero` 都有独立 Git 历史。先在实际发生修改的子项目检查 diff 和验证，再处理顶层 submodule 引用。
+- `paper_plane_x_backend`、`paper_plane_x_cli`、`paper_plane_x_dsh`、`paper_plane_x_frontend`、`paper_plane_x_zotero`、`paper_plane_x_radar` 都有独立 Git 历史。先在实际发生修改的子项目检查 diff 和验证，再处理顶层 submodule 引用。
 - 保持最小修改范围，不覆盖用户已有或其他任务产生的脏改动；发现重叠修改时先说明风险再继续。
 - 不手改构建产物、缓存、生成文件、vendored 依赖、锁文件中的非预期部分或运行时数据。依赖变化必须通过对应包管理器产生锁文件更新并说明原因。
-- Backend、CLI、Frontend 与 Zotero 的版本号由根目录 `VERSION` 和 `scripts/sync_version.py` 统一协调；DSH 目前维护独立版本。未经发布任务明确要求，不修改版本或创建发布产物。
+- Backend、CLI、Frontend 与 Zotero 的版本号由根目录 `VERSION` 和 `scripts/sync_version.py` 统一协调；DSH 与 Radar 维护独立版本。未经发布任务明确要求，不修改版本或创建发布产物。
 - 未经用户明确要求，不创建分支、不提交、不推送、不改写 Git 历史，也不初始化或更新 submodule 指针。
 - 不提交 `.env`、密钥、token、私有服务地址、真实论文内容、数据库、日志或其他运行时数据；展示日志、截图和测试夹具前先去除敏感信息。
 
@@ -32,7 +32,7 @@
 
 - 新行为和缺陷修复必须有回归测试；纯文档或无法自动化的改动应说明采用的替代验证。
 - 先运行最接近改动的定向测试，再按风险扩大到项目的 lint、类型检查、完整测试和 build；跨项目契约变更至少验证生产方和直接消费方。
-- 根目录常用聚合命令为 `just test`、`just lint`、`just build` 和 `just pre-commit`，目前覆盖 Backend、CLI、Frontend 与 Zotero，不包含 DSH；涉及 DSH 时进入其目录单独运行验证。只有任务确实影响这些项目且依赖已就绪时才运行聚合命令。
+- 根目录常用聚合命令为 `just test`、`just lint`、`just build` 和 `just pre-commit`，目前覆盖 Backend、CLI、Frontend、Zotero 与 Radar，不包含 DSH；涉及 DSH 时进入其目录单独运行验证。只有任务确实影响这些项目且依赖已就绪时才运行聚合命令。
 - 不得声称未执行的检查已通过。验证失败时报告完整命令、关键失败项、是否由本次改动引入，以及尚未验证的范围。
 - 不为了通过测试削弱断言、删除覆盖、跳过检查或改变真实契约；若测试与预期冲突，先查明哪一方过时。
 
@@ -50,3 +50,4 @@
 - DeepSeek Harness 插件：`paper_plane_x_dsh/AGENTS.md`
 - Vue Web 控制台：`paper_plane_x_frontend/AGENTS.md`
 - Zotero 插件：`paper_plane_x_zotero/AGENTS.md`
+- Codex 文献雷达与晨报投递：`paper_plane_x_radar/AGENTS.md`

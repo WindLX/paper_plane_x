@@ -66,6 +66,8 @@ flowchart LR
     W["Vue Web 控制台"] --> B
     C["ppx CLI"] --> B
     A["外部 AI Agent + Skills"] --> C
+    R["PPX Radar + Codex 定时任务"] --> C
+    R --> M["SMTP 邮件投递"]
     H["DeepSeek Harness 插件"] --> C
     H --> B
     B --> D["SQLite / 本地数据目录"]
@@ -78,7 +80,7 @@ flowchart LR
 
 ## 仓库结构
 
-本仓库是协调发布与集成测试的顶层仓库，五个组件通过 Git submodule 管理：
+本仓库是协调发布与集成测试的顶层仓库，六个组件通过 Git submodule 管理：
 
 | 目录                                                          | 组件                                 |
 | ------------------------------------------------------------- | ------------------------------------ |
@@ -87,6 +89,7 @@ flowchart LR
 | [`paper_plane_x_cli/`](paper_plane_x_cli/README.zh.md)        | `ppx` HTTP CLI 与 Agent Skills       |
 | [`paper_plane_x_zotero/`](paper_plane_x_zotero/README.md)     | Zotero 7+ 插件                       |
 | [`paper_plane_x_dsh/`](paper_plane_x_dsh/README.md)           | DeepSeek Harness 插件                |
+| [`paper_plane_x_radar/`](paper_plane_x_radar/README.zh.md)    | Codex 文献雷达、运行账本与晨报投递   |
 
 ## 面向用户：安装与运行
 
