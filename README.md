@@ -17,6 +17,7 @@ Paper Plane X 是一个面向科研阅读、论文处理和综述写作的本地
 - **Zotero 集成**：从 Zotero 上传 PDF、查看处理状态、关联项目并浏览结构化分析结果。
 - **Web 控制台**：管理项目、文献库、后台任务、Agent traces 和运行时设置。
 - **CLI 与 Agent Skills**：让 Codex、Claude Code、Pi agent、DeepSeek Harness 等工具通过受控 API 查询论文并将结果写回项目。
+- **PPX Radar 文献晨报**：由 Codex 定时检索指定主题的开放与学校授权论文，等待 PPX 解析后生成易读晨报，并通过 SMTP 在指定时间投递。
 - **DeepSeek Harness 插件**：在 DeepSeek Harness Web 控制台内查看/管理 ppx 上下文，并通过 `/ppx-paper` 检索、引用论文（[`paper_plane_x_dsh`](paper_plane_x_dsh/README.md)）。
 - **本地优先**：核心数据默认存储在本地 SQLite 和项目数据目录中；模型与解析服务由用户自行配置。
 
@@ -192,6 +193,19 @@ uv tool upgrade paper-plane-x-cli
 安装后，在 `Zotero Settings → Paper Plane X` 中填写后端地址，例如 `http://127.0.0.1:8000`；不要附加 `/api/v1`。
 
 详见 [Zotero 插件 README](paper_plane_x_zotero/README.md)。
+
+### 配置 PPX Radar 文献晨报
+
+Radar 将开放式检索与确定性投递分开：Codex Skill 负责按主题选文、取得合法全文、等待 PPX 解析并撰写晨报，`ppx-radar` 负责订阅、运行账本、本地/PPX 归档和 SMTP 幂等投递。检索与发信可以拆成两个定时任务，例如凌晨准备、早晨发送。
+
+```bash
+cd paper_plane_x_radar
+uv sync
+uv run ppx-radar skill install
+uv run ppx-radar doctor
+```
+
+SMTP 密码或邮箱授权码只通过本机环境变量提供，不进入 Radar 数据库、Git 或 Codex 任务提示词。订阅字段、QQ SMTP 配置、两阶段定时任务和晨报写作规范见 [Radar 中文 README](paper_plane_x_radar/README.zh.md)。
 
 ### 安装 DeepSeek Harness 插件
 
