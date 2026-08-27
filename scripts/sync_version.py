@@ -14,6 +14,9 @@ TARGETS = [
     REPO_ROOT / "paper_plane_x_backend" / "pyproject.toml",
     REPO_ROOT / "paper_plane_x_cli" / "pyproject.toml",
 ]
+PYTHON_MODULE_TARGETS = [
+    REPO_ROOT / "paper_plane_x_cli" / "src" / "paper_plane_x_cli" / "__init__.py",
+]
 UV_LOCK_TARGETS = [
     (
         REPO_ROOT / "paper_plane_x_backend" / "uv.lock",
@@ -50,6 +53,19 @@ def sync_toml_version(path: Path, version: str) -> None:
     )
     if count != 1:
         raise ValueError(f"Could not update version field in {path}")
+    path.write_text(updated, encoding="utf-8")
+
+
+def sync_python_module_version(path: Path, version: str) -> None:
+    original = path.read_text(encoding="utf-8")
+    updated, count = re.subn(
+        r'(?m)^__version__ = "[^"]+"$',
+        f'__version__ = "{version}"',
+        original,
+        count=1,
+    )
+    if count != 1:
+        raise ValueError(f"Could not update __version__ field in {path}")
     path.write_text(updated, encoding="utf-8")
 
 
@@ -134,6 +150,8 @@ def main() -> int:
 
     for path in TARGETS:
         sync_toml_version(path, version)
+    for path in PYTHON_MODULE_TARGETS:
+        sync_python_module_version(path, version)
     for path, project_name in UV_LOCK_TARGETS:
         sync_uv_lock_project_version(path, project_name, version)
     sync_package_json_version(FRONTEND_PACKAGE_JSON, version)
