@@ -88,7 +88,7 @@ flowchart LR
 | [`paper_plane_x_backend/`](paper_plane_x_backend/README.md)   | FastAPI 后端、任务处理、数据库与 API |
 | [`paper_plane_x_frontend/`](paper_plane_x_frontend/README.md) | Vue 3 Web 控制台                     |
 | [`paper_plane_x_cli/`](paper_plane_x_cli/README.zh.md)        | `ppx` HTTP CLI 与 Agent Skills       |
-| [`paper_plane_x_zotero/`](paper_plane_x_zotero/README.md)     | Zotero 7+ 插件                       |
+| [`paper_plane_x_zotero/`](paper_plane_x_zotero/README.md)     | Zotero 7–10 插件                     |
 | [`paper_plane_x_dsh/`](paper_plane_x_dsh/README.md)           | DeepSeek Harness 插件                |
 | [`paper_plane_x_radar/`](paper_plane_x_radar/README.zh.md)    | Codex 文献雷达、运行账本与晨报投递   |
 
