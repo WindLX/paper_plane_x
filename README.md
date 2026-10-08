@@ -274,6 +274,8 @@ ppx files upload --source ./notes.md --path /notes/notes.md
 ppx skills install
 ```
 
+默认安装到通用 Agent Skills 目录 `~/.agents/skills`，`ppx skills uninstall` 使用相同默认目录。需要其他目录时，使用 `--target-dir <目录>` 显式指定；完整说明见 [CLI Agent Skills](paper_plane_x_cli/README.zh.md#agent-skills)。
+
 安装后可向 Agent 提出类似任务：
 
 ```text
@@ -330,6 +332,8 @@ just build-console
 保持 PR 聚焦，不要混入无关格式化、依赖升级或生成文件。
 
 ## 版本与发布
+
+当前版本：0.2.1；变更详见 [0.2.1 发布说明](RELEASE_NOTES_0.2.1.md)。
 
 Paper Plane X 使用语义化版本号。根目录 `VERSION` 是单一事实来源：
 
