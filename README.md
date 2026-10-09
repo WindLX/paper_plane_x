@@ -333,7 +333,7 @@ just build-console
 
 ## 版本与发布
 
-当前版本：0.2.1；变更详见 [0.2.1 发布说明](RELEASE_NOTES_0.2.1.md)。
+当前版本：0.2.2；变更详见 [0.2.2 发布说明](RELEASE_NOTES_0.2.2.md)。
 
 Paper Plane X 使用语义化版本号。根目录 `VERSION` 是单一事实来源：
 
