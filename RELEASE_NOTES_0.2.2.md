@@ -10,7 +10,7 @@
 - Agent 配置使用单次总 Token 预算，默认 240000，后端自动计算输入及剩余输出空间；不再要求用户配置旧 `max_tokens` 或 tokenizer model。调整预算表单对齐。
 - 逐记录与逐流式 chunk 日志使用 VERBOSE；高频读取和 MinerU 轮询使用 DEBUG，关键业务结果与异常保留可见等级。
 - CLI 保持现有命令，上传支持图片原字节；更新按需读取的高级 Skill 参考和操作说明。
-- Backend、CLI、Frontend、Zotero 统一更新至 0.2.2；DSH 与 Radar 保持独立版本。Zotero 本次仅同步发布版本。
+- Backend、CLI、Frontend、Zotero 统一更新至 0.2.2。Zotero 本次仅同步发布版本。
 
 ## English
 
@@ -22,6 +22,6 @@
 - Configure a total token budget per request, defaulting to 240000. Calculate input usage and remaining output room in the backend without requiring legacy `max_tokens` or a tokenizer-model setting. Align the budget form.
 - Move per-record and per-stream-chunk diagnostics to VERBOSE and frequent reads and MinerU polling to DEBUG; retain meaningful business results and failures at visible levels.
 - Preserve CLI commands, send uploaded image bytes unchanged, and update the progressively disclosed advanced Skill reference.
-- Coordinate Backend, CLI, Frontend, and Zotero at 0.2.2. DSH and Radar keep independent versions; Zotero only receives the version update in this release.
+- Coordinate Backend, CLI, Frontend, and Zotero at 0.2.2. Zotero only receives the version update in this release.
 
 See [workbench behavior](docs/project-workbench.md), [project files](paper_plane_x_frontend/docs/project-files.md), [activity history ADR](docs/adr/0001-project-activity-history.md), and [logging conventions](paper_plane_x_backend/docs/logging_conventions.md).

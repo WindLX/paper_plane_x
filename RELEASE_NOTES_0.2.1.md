@@ -11,7 +11,7 @@
 - Zotero 增加批量重新处理与解除项目关联，按论文 ID 合并重复请求；批量刷新使用分块 batch-get，单项失败隔离，关闭发起窗口或卸载插件后停止派发后续操作。
 - Researcher Skill 优先呈现检索、查询规则、字段矩阵、笔记与全文资源；项目文件操作迁入按需读取的 `advanced-topics.md`。CLI 命令保持现有范围。
 - Skill 安装与卸载默认使用通用目录 `~/.agents/skills`；需要其他位置时显式指定 `--target-dir`。
-- Backend、CLI、Frontend 和 Zotero 统一为 0.2.1；DSH、Radar 保持独立版本。本轮不处理浏览器最小化问题。
+- Backend、CLI、Frontend 和 Zotero 统一为 0.2.1。本轮不处理浏览器最小化问题。
 
 ## English
 
@@ -24,6 +24,6 @@
 - Reprocess or unlink selected Zotero items in batches, merge duplicate paper IDs, refresh details through chunked batch-get, isolate item failures, and stop further dispatch when the owning window closes or the plugin unloads.
 - Prioritize research commands in the Researcher Skill and disclose project-file commands through `advanced-topics.md` only when needed. Preserve the existing CLI command surface.
 - Install and uninstall Skills in the generic `~/.agents/skills` directory by default; select other locations explicitly with `--target-dir`.
-- Update Backend, CLI, Frontend, and Zotero to 0.2.1. DSH and Radar retain independent versions; browser minimization investigation is deferred.
+- Update Backend, CLI, Frontend, and Zotero to 0.2.1. Browser minimization investigation is deferred.
 
 See [project-file behavior](paper_plane_x_frontend/docs/project-files.md), [domain vocabulary](CONTEXT.md), and [advanced Skill reference](paper_plane_x_cli/skills/ppx-researcher/references/advanced-topics.md).
